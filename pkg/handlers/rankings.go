@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -219,8 +220,16 @@ func formatStatsLine(display string, r rating.Rating) string {
 		display, r.GamesPlayed, r.Wins, r.Losses, wr, r.Rating)
 }
 
-// refreshStatsTopic maintains four pinned messages in the stats topic: ELO
-// rankings, Glicko-2 rankings, ELO stats, Glicko-2 stats.
+// refreshStatsTopic maintains exactly THREE messages in the stats topic:
+//
+//	1) ELO Rankings        (not pinned)
+//	2) Glicko-2 Rankings   (not pinned)
+//	3) Stats               (combined ELO + Glicko-2 per player; pinned)
+//
+// Any legacy or per-engine message IDs lingering in the group row are treated
+// as orphans and deleted. If any of the three maintained messages was deleted
+// from the chat (e.g. by a moderator), the next refresh detects the
+// "not found" reply from editMessageText and re-posts the message.
 func (h *Handlers) refreshStatsTopic(ctx context.Context, g models.Group) error {
 	if !g.FullyConfigured() {
 		return nil
@@ -234,38 +243,41 @@ func (h *Handlers) refreshStatsTopic(ctx context.Context, g models.Group) error 
 	if err != nil {
 		return err
 	}
-	eloS, err := h.renderStatsAll(ctx, g, eloEng, "ELO Stats")
-	if err != nil {
-		return err
-	}
-	glS, err := h.renderStatsAll(ctx, g, glickoEng, "Glicko-2 Stats")
+	statsText, err := h.renderCombinedStats(ctx, g, eloEng, glickoEng)
 	if err != nil {
 		return err
 	}
 
 	dirty := false
-	if id, changed, err := h.upsertPinned(ctx, g.GroupID, g.StatsTopicID, g.RankingsELOMessageID, eloR); err != nil {
+
+	// Orphans: legacy single rankings + per-engine stats messages.
+	for _, orphan := range []*int64{&g.RankingsMessageID, &g.StatsELOMessageID, &g.StatsGlickoMessageID} {
+		if *orphan != 0 {
+			_ = h.M.DeleteMessage(ctx, g.GroupID, *orphan)
+			*orphan = 0
+			dirty = true
+		}
+	}
+
+	// Maintained: ELO rankings (no pin).
+	if id, changed, err := h.upsertMessage(ctx, g.GroupID, g.StatsTopicID, g.RankingsELOMessageID, eloR, false); err != nil {
 		return err
 	} else if changed {
 		g.RankingsELOMessageID = id
 		dirty = true
 	}
-	if id, changed, err := h.upsertPinned(ctx, g.GroupID, g.StatsTopicID, g.RankingsGlickoMessageID, glR); err != nil {
+	// Maintained: Glicko-2 rankings (no pin).
+	if id, changed, err := h.upsertMessage(ctx, g.GroupID, g.StatsTopicID, g.RankingsGlickoMessageID, glR, false); err != nil {
 		return err
 	} else if changed {
 		g.RankingsGlickoMessageID = id
 		dirty = true
 	}
-	if id, changed, err := h.upsertPinned(ctx, g.GroupID, g.StatsTopicID, g.StatsELOMessageID, eloS); err != nil {
+	// Maintained: combined stats (pinned).
+	if id, changed, err := h.upsertMessage(ctx, g.GroupID, g.StatsTopicID, g.StatsMessageID, statsText, true); err != nil {
 		return err
 	} else if changed {
-		g.StatsELOMessageID = id
-		dirty = true
-	}
-	if id, changed, err := h.upsertPinned(ctx, g.GroupID, g.StatsTopicID, g.StatsGlickoMessageID, glS); err != nil {
-		return err
-	} else if changed {
-		g.StatsGlickoMessageID = id
+		g.StatsMessageID = id
 		dirty = true
 	}
 
@@ -275,18 +287,77 @@ func (h *Handlers) refreshStatsTopic(ctx context.Context, g models.Group) error 
 	return nil
 }
 
-// upsertPinned posts a new pinned message in the given topic if storedID==0,
-// or edits the existing message otherwise. Returns the (possibly new) message
-// ID and a flag indicating whether the caller should persist it.
-func (h *Handlers) upsertPinned(ctx context.Context, groupID, topicID, storedID int64, text string) (int64, bool, error) {
-	if storedID == 0 {
-		id, err := h.M.SendMessage(ctx, groupID, topicID, text)
-		if err != nil {
-			return 0, false, err
+// upsertMessage posts a new message in the given topic if storedID==0, or
+// edits the existing message otherwise. When the underlying message was
+// deleted out from under us (Telegram returns ErrNotFound on edit), it is
+// re-posted automatically. When `pin` is true and the message is freshly
+// posted, it is pinned (failure swallowed if permission missing).
+//
+// Returns the (possibly new) message ID and a flag indicating whether the
+// caller should persist it.
+func (h *Handlers) upsertMessage(ctx context.Context, groupID, topicID, storedID int64, text string, pin bool) (int64, bool, error) {
+	if storedID != 0 {
+		err := h.M.EditMessage(ctx, groupID, storedID, text)
+		if err == nil {
+			return storedID, false, nil
 		}
-		_ = h.M.PinMessage(ctx, groupID, id) // pin failures swallowed (permission may be missing)
-		return id, true, nil
+		if !errors.Is(err, messenger.ErrNotFound) {
+			// Edit failed for some reason other than vanished message;
+			// keep the stored ID and let the next refresh retry.
+			return storedID, false, nil
+		}
+		// Message was deleted — fall through to re-post.
 	}
-	_ = h.M.EditMessage(ctx, groupID, storedID, text)
-	return storedID, false, nil
+	id, err := h.M.SendMessage(ctx, groupID, topicID, text)
+	if err != nil {
+		return 0, false, err
+	}
+	if pin {
+		_ = h.M.PinMessage(ctx, groupID, id)
+	}
+	return id, true, nil
+}
+
+// renderCombinedStats renders ONE message containing every verified player's
+// per-engine ratings side by side, sorted by ELO desc.
+func (h *Handlers) renderCombinedStats(ctx context.Context, g models.Group, eloEng, glickoEng rating.Engine) (string, error) {
+	eloPR, err := h.computeRatingsFor(ctx, g, eloEng)
+	if err != nil {
+		return "", err
+	}
+	glPR, err := h.computeRatingsFor(ctx, g, glickoEng)
+	if err != nil {
+		return "", err
+	}
+	if len(eloPR) == 0 && len(glPR) == 0 {
+		return "Stats\n\nNo verified matches yet. Per-player stats will appear here once verified players approve their first match.", nil
+	}
+	// Sort by ELO descending.
+	order := rating.Sorted(eloPR)
+	if len(order) > MaxRankings {
+		order = order[:MaxRankings]
+	}
+	var sb strings.Builder
+	sb.WriteString("Stats\n")
+	for _, idStr := range order {
+		uid, _ := strconv.ParseInt(idStr, 10, 64)
+		u, _ := h.Store.Users().Get(ctx, uid)
+		eloR := eloPR[idStr]
+		glR, hasGl := glPR[idStr]
+		wr := "—"
+		if eloR.Wins+eloR.Losses > 0 {
+			wr = fmt.Sprintf("%.0f%%", 100*float64(eloR.Wins)/float64(eloR.Wins+eloR.Losses))
+		}
+		sb.WriteString("\n")
+		sb.WriteString(u.DisplayName())
+		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("Matches: %d | Wins: %d | Losses: %d | Win Rate: %s\n",
+			eloR.GamesPlayed, eloR.Wins, eloR.Losses, wr))
+		sb.WriteString(fmt.Sprintf("ELO: %.0f", eloR.Rating))
+		if hasGl {
+			sb.WriteString(fmt.Sprintf("\nGlicko-2: %.0f (RD %.0f)", glR.Rating, glR.Deviation))
+		}
+		sb.WriteString("\n")
+	}
+	return strings.TrimRight(sb.String(), "\n"), nil
 }

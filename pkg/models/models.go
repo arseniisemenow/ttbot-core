@@ -103,12 +103,12 @@ type Group struct {
 	AdminTelegramID          int64
 	MatchesTopicID           int64 // 0 = unset
 	StatsTopicID             int64 // 0 = unset
-	RankingsMessageID        int64 // DEPRECATED: legacy single-engine rankings message; superseded by per-engine fields below.
-	StatsMessageID           int64 // DEPRECATED: legacy single-engine stats message; superseded below.
-	RankingsELOMessageID     int64 // 0 = not posted yet
-	RankingsGlickoMessageID  int64 // 0 = not posted yet
-	StatsELOMessageID        int64 // 0 = not posted yet
-	StatsGlickoMessageID     int64 // 0 = not posted yet
+	RankingsMessageID        int64 // DEPRECATED orphan: legacy single-engine rankings message. Refresh deletes it and zeroes the field.
+	StatsMessageID           int64 // Combined ELO + Glicko-2 stats message (the only pinned message in the stats topic). 0 = not posted yet.
+	RankingsELOMessageID     int64 // ELO rankings message (not pinned). 0 = not posted yet.
+	RankingsGlickoMessageID  int64 // Glicko-2 rankings message (not pinned). 0 = not posted yet.
+	StatsELOMessageID        int64 // DEPRECATED orphan: per-engine ELO stats message. Refresh deletes it.
+	StatsGlickoMessageID     int64 // DEPRECATED orphan: per-engine Glicko-2 stats message. Refresh deletes it.
 	ConfirmationTimeoutHours uint32
 	CreatedAt                time.Time
 }

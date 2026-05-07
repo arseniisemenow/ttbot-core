@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/models"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/s21"
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/testkit"
@@ -431,20 +432,100 @@ func TestSetStatsTopicPostsPlaceholders(t *testing.T) {
 	w.ResetMessenger()
 	w.SendInGroup(testkit.Group{W: w, GroupID: groupID}, admin, 7, "/set_stats_topic")
 
-	// Expect 4 placeholder SendMessage calls (ELO rankings, Glicko rankings,
-	// ELO stats, Glicko stats) + the user-facing reply, and 4 pin calls.
+	// Expect 3 placeholder SendMessage calls (ELO rankings, Glicko rankings,
+	// combined Stats) + the user-facing reply, and 1 pin call (only Stats).
 	sends := w.Messen.CallsByMethod("SendMessage")
-	if len(sends) < 5 {
-		t.Fatalf("expected >=5 SendMessage calls (4 placeholders + reply), got %d:\n%s", len(sends), w.Messen.Pretty())
+	if len(sends) < 4 {
+		t.Fatalf("expected >=4 SendMessage calls (3 placeholders + reply), got %d:\n%s", len(sends), w.Messen.Pretty())
 	}
 	pins := w.Messen.CallsByMethod("PinMessage")
-	if len(pins) != 4 {
-		t.Errorf("expected 4 pin calls, got %d", len(pins))
+	if len(pins) != 1 {
+		t.Errorf("expected 1 pin call (only the combined stats message), got %d", len(pins))
 	}
 	g, _ := w.Store.Groups().Get(w.Ctx, groupID)
-	if g.RankingsELOMessageID == 0 || g.RankingsGlickoMessageID == 0 || g.StatsELOMessageID == 0 || g.StatsGlickoMessageID == 0 {
-		t.Errorf("placeholder IDs not stored: %+v", g)
+	if g.RankingsELOMessageID == 0 || g.RankingsGlickoMessageID == 0 || g.StatsMessageID == 0 {
+		t.Errorf("maintained message IDs not stored: %+v", g)
 	}
+}
+
+// TestMaintainedMessageRecreatedWhenDeleted simulates the next EditMessage
+// returning "message not found" (someone deleted one of the maintained
+// messages); the next refresh must detect that and re-post it.
+func TestMaintainedMessageRecreatedWhenDeleted(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("a_login", "pw", "kazan", "Kazan")
+	g := w.AddConfiguredGroup(-1001, "kazan", "Kazan", admin.TelegramID, 5, 7)
+	alice := w.AddUser(100, "alice").SetNickname("alice_s21", "kazan", "Kazan", true)
+	bobby := w.AddUser(200, "bobby").SetNickname("bob_s21", "kazan", "Kazan", true)
+	g = g.AddPlayer(alice.TelegramID).AddPlayer(bobby.TelegramID)
+
+	// First admin-created /match: initial post of all 3 maintained messages.
+	w.SendInGroup(g, testkit.User{W: w, TelegramID: admin.TelegramID, Username: "admin01"}, 5, "/match @alice @bobby 3-1")
+	gBefore, _ := w.Store.Groups().Get(w.Ctx, g.GroupID)
+	if gBefore.RankingsELOMessageID == 0 || gBefore.RankingsGlickoMessageID == 0 || gBefore.StatsMessageID == 0 {
+		t.Fatalf("maintained messages not all posted: %+v", gBefore)
+	}
+
+	// Simulate "message vanished": the next EditMessage call returns
+	// ErrNotFound. The handler must detect that and re-post the message,
+	// resulting in a new SendMessage call after the failed edit.
+	w.Messen.FailNext("EditMessage", messenger.ErrNotFound)
+
+	beforeSends := len(w.Messen.CallsByMethod("SendMessage"))
+	w.SendInGroup(g, testkit.User{W: w, TelegramID: admin.TelegramID, Username: "admin01"}, 5, "/match @alice @bobby 3-2")
+	afterSends := len(w.Messen.CallsByMethod("SendMessage"))
+
+	// Expect at least 2 new SendMessage calls: the user-facing match reply +
+	// the re-post of the vanished maintained message.
+	if afterSends-beforeSends < 2 {
+		t.Fatalf("expected the vanished maintained message to be re-posted (>=2 new sends after the failure); got %d new sends:\n%s",
+			afterSends-beforeSends, w.Messen.Pretty())
+	}
+
+	// At least one of the maintained IDs should have rotated.
+	gAfter, _ := w.Store.Groups().Get(w.Ctx, g.GroupID)
+	rotated := gAfter.RankingsELOMessageID != gBefore.RankingsELOMessageID ||
+		gAfter.RankingsGlickoMessageID != gBefore.RankingsGlickoMessageID ||
+		gAfter.StatsMessageID != gBefore.StatsMessageID
+	if !rotated {
+		t.Errorf("expected one of the maintained message IDs to change after re-post; before=%+v after=%+v", gBefore, gAfter)
+	}
+}
+
+// TestRefreshDeletesOrphanMessages verifies that legacy single-engine and
+// per-engine stats message IDs are cleaned up on refresh.
+func TestRefreshDeletesOrphanMessages(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("a_login", "pw", "kazan", "Kazan")
+	g := w.AddConfiguredGroup(-1001, "kazan", "Kazan", admin.TelegramID, 5, 7)
+	// Pre-populate the group with orphan IDs as if from an older code version.
+	gRow, _ := w.Store.Groups().Get(w.Ctx, g.GroupID)
+	gRow.RankingsMessageID = 9001
+	gRow.StatsELOMessageID = 9002
+	gRow.StatsGlickoMessageID = 9003
+	_ = w.Store.Groups().Upsert(w.Ctx, gRow)
+
+	alice := w.AddUser(100, "alice").SetNickname("alice_s21", "kazan", "Kazan", true)
+	bobby := w.AddUser(200, "bobby").SetNickname("bob_s21", "kazan", "Kazan", true)
+	w.SendInGroup(g, testkit.User{W: w, TelegramID: admin.TelegramID, Username: "admin01"}, 5,
+		"/match @alice @bobby 3-1")
+
+	deletes := w.Messen.CallsByMethod("DeleteMessage")
+	got := map[int64]bool{}
+	for _, c := range deletes {
+		got[c.MessageID] = true
+	}
+	for _, want := range []int64{9001, 9002, 9003} {
+		if !got[want] {
+			t.Errorf("orphan %d not deleted; deletes=%+v", want, deletes)
+		}
+	}
+	gAfter, _ := w.Store.Groups().Get(w.Ctx, g.GroupID)
+	if gAfter.RankingsMessageID != 0 || gAfter.StatsELOMessageID != 0 || gAfter.StatsGlickoMessageID != 0 {
+		t.Errorf("orphan IDs not zeroed: %+v", gAfter)
+	}
+	_ = alice
+	_ = bobby
 }
 
 // ---------- Admin participant Confirm auto-approves ------------------

@@ -69,13 +69,14 @@ func (h *Handlers) handleSetStatsTopic(ctx context.Context, m *messenger.Message
 		return h.reply(ctx, m, "Run this command inside the topic you want to use as the stats topic.")
 	}
 	g.StatsTopicID = m.MessageThreadID
-	// If the topic is being changed, drop stale message-IDs so we re-post.
-	g.RankingsMessageID = 0
-	g.StatsMessageID = 0
+	// If the topic is being (re-)pointed, drop stale message-IDs. The next
+	// refreshStatsTopic creates fresh placeholders in the new topic. Any
+	// non-zero ID from before is treated as an orphan and deleted by refresh.
 	g.RankingsELOMessageID = 0
 	g.RankingsGlickoMessageID = 0
-	g.StatsELOMessageID = 0
-	g.StatsGlickoMessageID = 0
+	g.StatsMessageID = 0
+	// (Old per-engine stats fields are intentionally NOT zeroed here so the
+	//  next refresh can find and delete them as orphans.)
 	if err := h.Store.Groups().Upsert(ctx, g); err != nil {
 		return err
 	}
