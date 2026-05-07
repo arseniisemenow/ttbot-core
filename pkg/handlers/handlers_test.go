@@ -614,6 +614,48 @@ func TestListUsersEmptyDB(t *testing.T) {
 	w.AssertReplyContains("Users (1)")
 }
 
+// ---------- Stats-topic janitor --------------------------------------
+
+func TestStatsTopicLitterDeleted(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("a_login", "pw", "kazan", "Kazan")
+	g := w.AddConfiguredGroup(-1001, "kazan", "Kazan", admin.TelegramID, 5, 7)
+	stranger := w.AddUser(999, "stranger0")
+
+	// A random user posts in the stats topic. Bot must delete it.
+	w.SendInGroup(g, stranger, g.StatsTopicID, "lol")
+	deletes := w.Messen.CallsByMethod("DeleteMessage")
+	if len(deletes) != 1 {
+		t.Fatalf("expected 1 DeleteMessage, got %d:\n%s", len(deletes), w.Messen.Pretty())
+	}
+}
+
+func TestStatsTopicLitterNotDeletedInOtherTopic(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("a_login", "pw", "kazan", "Kazan")
+	g := w.AddConfiguredGroup(-1001, "kazan", "Kazan", admin.TelegramID, 5, 7)
+	stranger := w.AddUser(999, "stranger0")
+
+	// A random user posts in the matches topic. Bot must NOT delete it as
+	// litter. (It might still ignore an unknown text command, but no delete.)
+	w.SendInGroup(g, stranger, g.MatchesTopicID, "hello")
+	deletes := w.Messen.CallsByMethod("DeleteMessage")
+	if len(deletes) != 0 {
+		t.Errorf("matches-topic message should not be deleted; got %+v", deletes)
+	}
+}
+
+func TestStatsTopicLitterIgnoredInUnregisteredGroup(t *testing.T) {
+	w := testkit.New(t)
+	stranger := w.AddUser(999, "stranger0")
+	// Group not registered with the bot.
+	w.SendInGroup(testkit.Group{W: w, GroupID: -1234, MatchesTopicID: 9, StatsTopicID: 8}, stranger, 8, "hello")
+	deletes := w.Messen.CallsByMethod("DeleteMessage")
+	if len(deletes) != 0 {
+		t.Errorf("unregistered-group message should not be deleted; got %+v", deletes)
+	}
+}
+
 // Guard: dispatcher should not panic on private chats with unrelated text.
 func TestDispatcherIgnoresUnknownText(t *testing.T) {
 	w := testkit.New(t)

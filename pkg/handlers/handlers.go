@@ -73,6 +73,14 @@ func (h *Handlers) Dispatch(ctx context.Context, u *messenger.Update) error {
 }
 
 func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) error {
+	// Stats topic is read-only by policy: the bot maintains exactly three
+	// messages (ELO Rankings, Glicko-2 Rankings, combined Stats) and deletes
+	// anything else that lands in there. The maintained messages are posted
+	// by the bot itself and so don't arrive as updates; the check below is
+	// defensive in case Telegram ever echoes them back.
+	if h.deleteStatsTopicLitter(ctx, m) {
+		return nil
+	}
 	if m.From == nil || m.Text == "" {
 		return nil
 	}
@@ -167,3 +175,28 @@ func (h *Handlers) reply(ctx context.Context, m *messenger.Message, text string)
 // (Per-engine rendering is now handled by handlers/rankings.go's buildEngines.
 // The legacy single-engine selection via bot_settings.rating_engine is no
 // longer used — both engines are always rendered side by side.)
+
+// deleteStatsTopicLitter inspects a freshly-received message and, if it
+// landed in a registered group's stats topic and is not one of the three
+// maintained messages, deletes it. Returns true when a deletion was attempted
+// (the dispatcher then short-circuits further handling for that message).
+func (h *Handlers) deleteStatsTopicLitter(ctx context.Context, m *messenger.Message) bool {
+	if m == nil || m.MessageThreadID == 0 {
+		return false
+	}
+	g, err := h.Store.Groups().Get(ctx, m.Chat.ID)
+	if err != nil {
+		return false
+	}
+	if g.StatsTopicID == 0 || m.MessageThreadID != g.StatsTopicID {
+		return false
+	}
+	// Defensive: never touch the messages we maintain.
+	if m.MessageID == g.RankingsELOMessageID ||
+		m.MessageID == g.RankingsGlickoMessageID ||
+		m.MessageID == g.StatsMessageID {
+		return false
+	}
+	_ = h.M.DeleteMessage(ctx, m.Chat.ID, m.MessageID)
+	return true
+}
