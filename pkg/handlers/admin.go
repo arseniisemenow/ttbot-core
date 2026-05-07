@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
@@ -38,10 +39,26 @@ func (h *Handlers) handleAdmin(ctx context.Context, m *messenger.Message, args s
 	if existing, err := h.Store.Admins().GetByCampus(ctx, profile.CampusID); err == nil {
 		if existing.TelegramID != m.From.ID {
 			text := profile.CampusName + " already has an admin"
-			if existing.S21Login != "" {
-				text += ": " + existing.S21Login
+			// Try to surface the existing admin's Telegram identity so the
+			// caller can recognise / contact them.
+			existingUser, _ := h.Store.Users().Get(ctx, existing.TelegramID)
+			ident := ""
+			if existingUser.TelegramUsername != "" {
+				ident = "@" + existingUser.TelegramUsername
 			}
-			text += ". Contact this user to decide who will be the admin."
+			if existing.S21Login != "" {
+				if ident != "" {
+					ident += " (S21 login: " + existing.S21Login + ")"
+				} else {
+					ident = "S21 login: " + existing.S21Login
+				}
+			}
+			if ident != "" {
+				text += " — " + ident
+			}
+			text += fmt.Sprintf(", Telegram ID: %d.\n", existing.TelegramID)
+			text += "If that's not you, contact this person to decide who will be the admin. " +
+				"If it IS you using a different Telegram account, sign in with the original Telegram account and re-run /admin to rotate credentials."
 			return h.reply(ctx, m, text)
 		}
 		// Same admin — credential / login rotation path.

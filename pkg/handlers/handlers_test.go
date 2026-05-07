@@ -43,6 +43,11 @@ func TestAdminCampusAlreadyTaken(t *testing.T) {
 	w.S21.SetUser("bob_login", "pw", s21.Profile{Login: "bob_login", CampusID: "kazan", CampusName: "Kazan"})
 	w.SendDM(bob, "/admin bob_login:pw")
 	w.AssertReplyContains("already has an admin")
+	// Should surface the existing admin's identity so the new caller can
+	// recognise them.
+	w.AssertReplyContains("@alice")
+	w.AssertReplyContains("alice_login")
+	w.AssertReplyContains("100")
 }
 
 // ---------- /provide_nickname --------------------------------------------
