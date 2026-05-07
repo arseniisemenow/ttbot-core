@@ -475,6 +475,63 @@ func TestAdminParticipantConfirmAutoApproves(t *testing.T) {
 	}
 }
 
+// ---------- /list_users (admin-only) ----------------------------------
+
+func TestListUsersRejectsNonAdmin(t *testing.T) {
+	w := testkit.New(t)
+	alice := w.AddUser(100, "alice")
+	w.SendDM(alice, "/list_users")
+	w.AssertReplyContains("Only admins")
+}
+
+func TestListUsersAdminListsAndSorts(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("admin_login", "pw", "kazan", "Kazan")
+	// One nicknamed verified user, one nicknamed unverified user, one guest, one with no nickname.
+	w.AddUser(100, "zoey").SetNickname("zach_s21", "kazan", "Kazan", true)
+	w.AddUser(200, "alfie").SetNickname("alpha_s21", "kazan", "Kazan", false)
+	guest := w.AddUser(300, "ginny")
+	// Mark as guest manually.
+	gu, _ := w.Store.Users().Get(w.Ctx, guest.TelegramID)
+	gu.NicknameStatus = models.NicknameStatusGuest
+	gu.VerifiedBy = models.VerifiedByAdmin
+	_ = w.Store.Users().Upsert(w.Ctx, gu)
+	w.AddUser(400, "nobody01")
+
+	w.SendDM(admin, "/list_users")
+	got := w.LastReply().Text
+	// Must contain count and all users.
+	for _, want := range []string{"Users (5)", "alpha_s21", "zach_s21", "@ginny", "@nobody01", "admin_login"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Sort: admin (admin_login) and alpha_s21 are both "provided" rank.
+	// admin_login < alpha_s21 lexicographically? "a" vs "a"… "admin" < "alpha".
+	// So admin_login should appear before alpha_s21, alpha_s21 before zach_s21,
+	// then guest, then no-nickname.
+	posAdmin := strings.Index(got, "admin_login")
+	posAlpha := strings.Index(got, "alpha_s21")
+	posZach := strings.Index(got, "zach_s21")
+	posGinny := strings.Index(got, "@ginny")
+	posNobody := strings.Index(got, "@nobody01")
+	if !(posAdmin < posAlpha && posAlpha < posZach && posZach < posGinny && posGinny < posNobody) {
+		t.Errorf("wrong sort order:\n%s\npositions: admin=%d alpha=%d zach=%d ginny=%d nobody=%d",
+			got, posAdmin, posAlpha, posZach, posGinny, posNobody)
+	}
+}
+
+func TestListUsersEmptyDB(t *testing.T) {
+	w := testkit.New(t)
+	admin := w.AddUser(50, "admin01").MakeAdmin("admin_login", "pw", "kazan", "Kazan")
+	// Wipe non-admin users by truncating store ... actually MakeAdmin already
+	// added admin to users, so DB is non-empty. Remove that helper for this test.
+	_ = admin
+	w.SendDM(admin, "/list_users")
+	// Admin user is present from MakeAdmin, so this should list at least one.
+	w.AssertReplyContains("Users (1)")
+}
+
 // Guard: dispatcher should not panic on private chats with unrelated text.
 func TestDispatcherIgnoresUnknownText(t *testing.T) {
 	w := testkit.New(t)

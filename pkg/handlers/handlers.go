@@ -113,6 +113,10 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		if isPrivate {
 			return h.handleGuest(ctx, m, args)
 		}
+	case "/list_users":
+		if isPrivate {
+			return h.handleListUsers(ctx, m)
+		}
 	// --- Group config (any topic of registered supergroup) ---
 	case "/bot_register_group":
 		return h.handleBotRegisterGroup(ctx, m)

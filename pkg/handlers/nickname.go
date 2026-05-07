@@ -3,6 +3,9 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/arseniisemenow/ttbot-repo-placeholder-1/pkg/messenger"
@@ -281,6 +284,93 @@ func (h *Handlers) handleGuest(ctx context.Context, m *messenger.Message, args s
 		return err
 	}
 	return h.reply(ctx, m, "Guest created: @"+target.TelegramUsername+".")
+}
+
+// handleListUsers prints every users-table row (admin-only, DM-only). Output
+// is sorted: nicknamed users alphabetically by S21 nickname, then guests by
+// @username, then users without nickname by @username (or telegram_id).
+func (h *Handlers) handleListUsers(ctx context.Context, m *messenger.Message) error {
+	if _, err := h.Store.Admins().Get(ctx, m.From.ID); err != nil {
+		return h.reply(ctx, m, "Only admins can run /list_users.")
+	}
+	users, err := h.Store.Users().List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return h.reply(ctx, m, "No users registered yet.")
+	}
+
+	// Sort: rank by nickname_status (provided < guest < none), then by display
+	// name within each rank, case-insensitive. Telegram-id as tiebreaker.
+	rank := func(u models.User) int {
+		switch u.NicknameStatus {
+		case models.NicknameStatusProvided:
+			return 0
+		case models.NicknameStatusGuest:
+			return 1
+		default:
+			return 2
+		}
+	}
+	sortKey := func(u models.User) string {
+		if u.S21Nickname != "" {
+			return strings.ToLower(u.S21Nickname)
+		}
+		if u.TelegramUsername != "" {
+			return strings.ToLower(u.TelegramUsername)
+		}
+		return ""
+	}
+	sort.SliceStable(users, func(i, j int) bool {
+		ri, rj := rank(users[i]), rank(users[j])
+		if ri != rj {
+			return ri < rj
+		}
+		ki, kj := sortKey(users[i]), sortKey(users[j])
+		if ki != kj {
+			return ki < kj
+		}
+		return users[i].TelegramID < users[j].TelegramID
+	})
+
+	var sb strings.Builder
+	sb.WriteString("Users (")
+	sb.WriteString(strconv.Itoa(len(users)))
+	sb.WriteString("):\n")
+	const maxRows = 100
+	shown := users
+	if len(shown) > maxRows {
+		shown = shown[:maxRows]
+	}
+	for i, u := range shown {
+		display := u.DisplayName()
+		if display == "" {
+			display = "Telegram ID " + strconv.FormatInt(u.TelegramID, 10)
+		}
+		sb.WriteString(strconv.Itoa(i + 1))
+		sb.WriteString(". ")
+		sb.WriteString(display)
+		// Append S21 nickname when display name is the @username (guest case).
+		if u.S21Nickname != "" && display != u.S21Nickname {
+			sb.WriteString(" (S21: ")
+			sb.WriteString(u.S21Nickname)
+			sb.WriteString(")")
+		}
+		sb.WriteString(" — ")
+		sb.WriteString(string(u.NicknameStatus))
+		if u.VerifiedBy != "" && u.VerifiedBy != models.VerifiedByNone {
+			sb.WriteString(", verified by ")
+			sb.WriteString(string(u.VerifiedBy))
+		} else if u.NicknameStatus == models.NicknameStatusProvided {
+			sb.WriteString(", unverified")
+		}
+		sb.WriteString("\n")
+	}
+	if len(users) > maxRows {
+		sb.WriteString(fmt.Sprintf("... and %d more\n", len(users)-maxRows))
+	}
+	return h.reply(ctx, m, strings.TrimRight(sb.String(), "\n"))
 }
 
 // findFirstAdmin returns any registered admin (used as a token source for
