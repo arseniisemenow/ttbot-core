@@ -79,7 +79,7 @@ func (h *Handlers) handleStats(ctx context.Context, m *messenger.Message, args s
 			target = ius[0].TelegramID
 		}
 	}
-	if !h.isVerified(ctx, target) {
+	if !h.hasNickname(ctx, target) {
 		return h.reply(ctx, m, "Player not in rankings yet.")
 	}
 
@@ -118,21 +118,21 @@ func (h *Handlers) handleStats(ctx context.Context, m *messenger.Message, args s
 	return h.reply(ctx, m, header)
 }
 
-// computeRatingsFor reads matches in the group, filters to APPROVED + both
-// players verified (per identity service), then runs the given engine on the
-// result.
+// computeRatingsFor reads matches in the group, filters to APPROVED matches
+// where both players have an S21 nickname registered (per identity service),
+// then runs the given engine on the result.
 func (h *Handlers) computeRatingsFor(ctx context.Context, g models.Group, engine rating.Engine) (rating.PlayerRatings, error) {
 	matches, err := h.Store.Matches().ListByGroup(ctx, g.GroupID)
 	if err != nil {
 		return nil, err
 	}
-	verified := map[int64]bool{}
+	nicknamed := map[int64]bool{}
 	for _, mm := range matches {
 		for _, id := range []int64{mm.Player1ID, mm.Player2ID} {
-			if _, seen := verified[id]; seen {
+			if _, seen := nicknamed[id]; seen {
 				continue
 			}
-			verified[id] = h.isVerified(ctx, id)
+			nicknamed[id] = h.hasNickname(ctx, id)
 		}
 	}
 	var input []rating.Match
@@ -140,7 +140,7 @@ func (h *Handlers) computeRatingsFor(ctx context.Context, g models.Group, engine
 		if mm.Status != models.MatchStatusApproved {
 			continue
 		}
-		if !verified[mm.Player1ID] || !verified[mm.Player2ID] {
+		if !nicknamed[mm.Player1ID] || !nicknamed[mm.Player2ID] {
 			continue
 		}
 		input = append(input, rating.Match{
@@ -161,7 +161,7 @@ func (h *Handlers) renderRankings(ctx context.Context, g models.Group, engine ra
 		return "", err
 	}
 	if len(pr) == 0 {
-		return label + "\n\nNo verified matches yet. Once two registered players play and approve a match, this list updates automatically.", nil
+		return label + "\n\nNo matches counted yet. Once two players with S21 nicknames play and approve a match, this list updates automatically.", nil
 	}
 	order := rating.Sorted(pr)
 	if len(order) > MaxRankings {
@@ -257,7 +257,7 @@ func (h *Handlers) upsertMessage(ctx context.Context, groupID, topicID, storedID
 	return id, true, nil
 }
 
-// renderCombinedStats renders ONE message containing every verified player's
+// renderCombinedStats renders ONE message containing every nicknamed player's
 // per-engine ratings side by side, sorted by ELO desc.
 func (h *Handlers) renderCombinedStats(ctx context.Context, g models.Group, eloEng, glickoEng rating.Engine) (string, error) {
 	eloPR, err := h.computeRatingsFor(ctx, g, eloEng)
@@ -269,7 +269,7 @@ func (h *Handlers) renderCombinedStats(ctx context.Context, g models.Group, eloE
 		return "", err
 	}
 	if len(eloPR) == 0 && len(glPR) == 0 {
-		return "Stats\n\nNo verified matches yet. Per-player stats will appear here once verified players approve their first match.", nil
+		return "Stats\n\nNo matches counted yet. Per-player stats will appear here once players with S21 nicknames approve their first match.", nil
 	}
 	order := rating.Sorted(eloPR)
 	if len(order) > MaxRankings {

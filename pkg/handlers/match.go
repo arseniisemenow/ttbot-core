@@ -133,7 +133,7 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 	})
 	cb := fmt.Sprintf("%d:%d", g.GroupID, matchID)
 	_, err = h.M.SendKeyboard(ctx, g.GroupID, g.MatchesTopicID,
-		text+"\nWon't affect ratings until both players are verified.",
+		text+"\nWon't affect ratings until both players have provided their S21 nickname.",
 		"Confirm", cbConfirmPrefix+cb, "Cancel", cbCancelPrefix+cb)
 	return err
 }
@@ -203,12 +203,11 @@ func (h *Handlers) displayFor(ctx context.Context, groupID, telegramID int64, fa
 	return fmt.Sprintf("Player %d", telegramID)
 }
 
-// isVerified reports whether the given telegram_id should contribute to
-// rankings and stats. With identity-service mode this means "the user has a
-// nickname registered". Returns false when there is no identity service yet
-// (no admin has registered creds) so rankings stay empty rather than blowing
-// up.
-func (h *Handlers) isVerified(ctx context.Context, telegramID int64) bool {
+// hasNickname reports whether the given telegram_id has a nickname registered
+// in the identity service. Only players with a nickname contribute to rankings
+// and stats. Returns false when there is no identity service yet (no admin has
+// registered creds) so rankings stay empty rather than blowing up.
+func (h *Handlers) hasNickname(ctx context.Context, telegramID int64) bool {
 	svc := h.Identity()
 	if svc == nil {
 		return false
