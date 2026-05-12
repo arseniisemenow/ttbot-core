@@ -102,12 +102,17 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 		return err
 	}
 
-	header := fmt.Sprintf("Match #%d ", matchID)
-	body := fmt.Sprintf("%s: %s vs %s. Score %d-%d.",
-		map[bool]string{true: "registered", false: "pending"}[isAdmin],
-		p1.Display, p2.Display,
-		score.P1, score.P2)
-	text := header + body
+	verb := "pending"
+	if isAdmin {
+		verb = "registered"
+	}
+	text := h.renderMatch(ctx, g.GroupID, models.Match{
+		MatchID:      matchID,
+		Player1ID:    p1.TelegramID,
+		Player2ID:    p2.TelegramID,
+		Player1Score: score.P1,
+		Player2Score: score.P2,
+	}, verb)
 	if p1.Note != "" {
 		text += "\n" + p1.Note
 	}
@@ -290,7 +295,7 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 	if h.isChatAdmin(ctx, gid, q.From.ID) {
 		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
 		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
-			h.renderApproved(ctx, gid, match), nil)
+			h.renderMatch(ctx, gid, match, "confirmed"), nil)
 		_ = h.refreshStatsTopic(ctx, g)
 		return h.M.AnswerCallback(ctx, q.ID, "Approved by admin")
 	}
@@ -303,7 +308,7 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 	if confirmedSet[match.Player1ID] && confirmedSet[match.Player2ID] {
 		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
 		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
-			h.renderApproved(ctx, gid, match), nil)
+			h.renderMatch(ctx, gid, match, "confirmed"), nil)
 		_ = h.refreshStatsTopic(ctx, g)
 		return h.M.AnswerCallback(ctx, q.ID, "Confirmed")
 	}
@@ -345,19 +350,23 @@ func (h *Handlers) handleCancelTap(ctx context.Context, q *messenger.CallbackQue
 	return h.M.AnswerCallback(ctx, q.ID, "Cancelled")
 }
 
-// renderApproved produces the 2-line scoreboard message shown when a match
-// becomes APPROVED. Each player slot is "<s21 nickname> (@<telegram username>)"
-// when both are known, gracefully degrading when one or both are missing.
-// The winner is placed on the left.
-func (h *Handlers) renderApproved(ctx context.Context, groupID int64, m models.Match) string {
+// renderMatch is the canonical formatter for any match-status announcement.
+// Every flow that posts a "Match #N <verb>" line (/match, confirmation tap,
+// undo, restore) routes through this so the wording and layout stay in one
+// place. `verb` is the lifecycle word: "registered", "pending", "confirmed",
+// "undone", "restored". The winner is always placed on the left of the
+// scoreboard line.
+func (h *Handlers) renderMatch(ctx context.Context, groupID int64, m models.Match, verb string) string {
 	p1 := h.playerLabel(ctx, groupID, m.Player1ID)
 	p2 := h.playerLabel(ctx, groupID, m.Player2ID)
-	if m.Player1Score >= m.Player2Score {
-		return fmt.Sprintf("Match #%d confirmed.\n%s %d — %d %s",
-			m.MatchID, p1, m.Player1Score, m.Player2Score, p2)
+	leftLabel, leftScore := p1, m.Player1Score
+	rightLabel, rightScore := p2, m.Player2Score
+	if m.Player2Score > m.Player1Score {
+		leftLabel, leftScore = p2, m.Player2Score
+		rightLabel, rightScore = p1, m.Player1Score
 	}
-	return fmt.Sprintf("Match #%d confirmed.\n%s %d — %d %s",
-		m.MatchID, p2, m.Player2Score, m.Player1Score, p1)
+	return fmt.Sprintf("Match #%d %s.\n%s %d — %d %s",
+		m.MatchID, verb, leftLabel, leftScore, rightScore, rightLabel)
 }
 
 // playerLabel returns "<s21 nickname> (@<telegram username>)" when both are

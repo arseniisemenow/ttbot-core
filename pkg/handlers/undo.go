@@ -103,7 +103,11 @@ func (h *Handlers) toggleMatchAndAnnounce(ctx context.Context, m *messenger.Mess
 	}
 	_ = h.Store.UndoCommands().DeleteForMatch(ctx, g.GroupID, match.MatchID)
 	_ = h.M.SendReaction(ctx, m.Chat.ID, m.MessageID, "👍")
-	if err := h.reply(ctx, m, fmt.Sprintf("Match #%d %s.", match.MatchID, verb)); err != nil {
+	// Re-read so the announced status matches what we just wrote (verb still
+	// drives the wording — we just need fresh fields for the scoreboard).
+	announced := match
+	announced.Status = newStatus
+	if err := h.reply(ctx, m, h.renderMatch(ctx, g.GroupID, announced, verb)); err != nil {
 		return err
 	}
 	_ = h.refreshStatsTopic(ctx, g)
