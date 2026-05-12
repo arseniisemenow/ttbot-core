@@ -27,6 +27,7 @@ type Mock struct {
 	failures    map[string]error // method-name → error to return on next call
 	failureChat map[string]int64 // optional chat-ID scoping for failures
 	chatAdmins  map[chatAdminKey]bool
+	chatMemberUsernames map[chatAdminKey]string
 }
 
 // NewMock creates a fresh Mock with messageID counter starting at 1.
@@ -215,6 +216,32 @@ func (m *Mock) SetChatAdmin(chatID, userID int64, isAdmin bool) {
 }
 
 type chatAdminKey struct{ Chat, User int64 }
+
+// ResolveChatMemberUsername returns the value previously configured via
+// SetChatMemberUsername (or "" if not set). Records the call.
+func (m *Mock) ResolveChatMemberUsername(ctx context.Context, chatID, userID int64) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.record(Call{Method: "ResolveChatMemberUsername", ChatID: chatID, MessageID: userID})
+	if err := m.maybeFail("ResolveChatMemberUsername", chatID); err != nil {
+		return "", err
+	}
+	if m.chatMemberUsernames == nil {
+		return "", nil
+	}
+	return m.chatMemberUsernames[chatAdminKey{chatID, userID}], nil
+}
+
+// SetChatMemberUsername seeds the value ResolveChatMemberUsername will return
+// for the given (chatID, userID).
+func (m *Mock) SetChatMemberUsername(chatID, userID int64, username string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.chatMemberUsernames == nil {
+		m.chatMemberUsernames = map[chatAdminKey]string{}
+	}
+	m.chatMemberUsernames[chatAdminKey{chatID, userID}] = username
+}
 
 // Pretty returns a human-readable rendering of all calls, useful in test
 // failure messages.

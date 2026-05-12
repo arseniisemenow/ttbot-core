@@ -45,6 +45,9 @@ type ParticipantRepo interface {
 	Get(ctx context.Context, groupID, telegramID int64) (models.Participant, error)
 	GetByUsername(ctx context.Context, groupID int64, telegramUsername string) (models.Participant, error)
 	Upsert(ctx context.Context, p models.Participant) error
+	// ListByGroup returns every participant cached for a single group. Used
+	// by the username-refresh flow (cron + /refresh_usernames).
+	ListByGroup(ctx context.Context, groupID int64) ([]models.Participant, error)
 }
 
 // AdminRepo persists campus admins.

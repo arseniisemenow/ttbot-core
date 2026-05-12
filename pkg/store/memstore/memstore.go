@@ -111,6 +111,18 @@ func (r participantRepo) GetByUsername(_ context.Context, gid int64, username st
 	return models.Participant{}, store.ErrNotFound
 }
 
+func (r participantRepo) ListByGroup(_ context.Context, gid int64) ([]models.Participant, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var out []models.Participant
+	for k, p := range r.s.participants {
+		if k.Group == gid {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 func (r participantRepo) Upsert(_ context.Context, p models.Participant) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

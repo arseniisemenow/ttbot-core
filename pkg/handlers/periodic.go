@@ -22,6 +22,9 @@ func (h *Handlers) PeriodicJob(ctx context.Context) error {
 	if err := h.cleanExpiredUndo(ctx); err != nil {
 		log.Printf("periodic: undo: %v", err)
 	}
+	if err := h.refreshAllUsernames(ctx); err != nil {
+		log.Printf("periodic: refresh_usernames: %v", err)
+	}
 	return nil
 }
 

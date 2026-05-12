@@ -243,6 +243,35 @@ func (r participantRepo) GetByUsername(ctx context.Context, gid int64, username 
 	return p, err
 }
 
+func (r participantRepo) ListByGroup(ctx context.Context, gid int64) ([]models.Participant, error) {
+	var out []models.Participant
+	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
+		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
+			`DECLARE $g AS Uint64;
+			 SELECT group_id, telegram_id, telegram_username, activated_at
+			 FROM participants WHERE group_id = $g;`,
+			table.NewQueryParameters(
+				table.ValueParam("$g", types.Uint64Value(uint64(gid))),
+			))
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		if err := res.NextResultSetErr(ctx); err != nil {
+			return err
+		}
+		for res.NextRow() {
+			p, err := scanParticipant(res)
+			if err != nil {
+				return err
+			}
+			out = append(out, p)
+		}
+		return nil
+	})
+	return out, err
+}
+
 func (r participantRepo) Upsert(ctx context.Context, p models.Participant) error {
 	const sql = `
 DECLARE $g AS Uint64;

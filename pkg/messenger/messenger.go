@@ -57,6 +57,12 @@ type Messenger interface {
 	// match-flow auto-approve where "admin" is now Telegram-chat-admin, not
 	// a separately-stored campus admin role.
 	IsChatAdmin(ctx context.Context, chatID, userID int64) (bool, error)
+
+	// ResolveChatMemberUsername fetches the current @username for a chat
+	// member via Telegram's getChatMember endpoint. Returns "" when the user
+	// has no public @username (or when Telegram doesn't include the field
+	// for non-member statuses). Errors are reserved for transport failures.
+	ResolveChatMemberUsername(ctx context.Context, chatID, userID int64) (string, error)
 }
 
 // Button is a single inline-keyboard button.

@@ -240,6 +240,21 @@ func (t *telegramAPI) IsChatAdmin(ctx context.Context, chatID, userID int64) (bo
 	return resp.Status == "creator" || resp.Status == "administrator", nil
 }
 
+func (t *telegramAPI) ResolveChatMemberUsername(ctx context.Context, chatID, userID int64) (string, error) {
+	var resp struct {
+		User struct {
+			Username string `json:"username"`
+		} `json:"user"`
+	}
+	if err := t.call(ctx, "getChatMember", map[string]any{
+		"chat_id": chatID,
+		"user_id": userID,
+	}, &resp); err != nil {
+		return "", err
+	}
+	return resp.User.Username, nil
+}
+
 // Quick formatters used by the command-routing layer.
 
 // FormatChatID turns a chat ID into the form Telegram accepts.

@@ -155,6 +155,8 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		return h.handleSetMatchesTopic(ctx, m)
 	case "/set_stats_topic":
 		return h.handleSetStatsTopic(ctx, m)
+	case "/refresh_usernames":
+		return h.handleRefreshUsernames(ctx, m)
 	// --- Group, must be in matches topic ---
 	case "/match":
 		return h.handleMatch(ctx, m, args)
