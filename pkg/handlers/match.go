@@ -290,7 +290,7 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 	if h.isChatAdmin(ctx, gid, q.From.ID) {
 		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
 		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
-			renderApproved(match), nil)
+			h.renderApproved(ctx, gid, match), nil)
 		_ = h.refreshStatsTopic(ctx, g)
 		return h.M.AnswerCallback(ctx, q.ID, "Approved by admin")
 	}
@@ -303,7 +303,7 @@ func (h *Handlers) handleConfirmTap(ctx context.Context, q *messenger.CallbackQu
 	if confirmedSet[match.Player1ID] && confirmedSet[match.Player2ID] {
 		_ = h.Store.Matches().UpdateStatus(ctx, gid, mid, models.MatchStatusApproved)
 		_ = h.M.EditKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageID,
-			renderApproved(match), nil)
+			h.renderApproved(ctx, gid, match), nil)
 		_ = h.refreshStatsTopic(ctx, g)
 		return h.M.AnswerCallback(ctx, q.ID, "Confirmed")
 	}
@@ -345,9 +345,45 @@ func (h *Handlers) handleCancelTap(ctx context.Context, q *messenger.CallbackQue
 	return h.M.AnswerCallback(ctx, q.ID, "Cancelled")
 }
 
-func renderApproved(m models.Match) string {
-	return fmt.Sprintf("Match #%d confirmed. p1=%d vs p2=%d. Score %d-%d.",
-		m.MatchID, m.Player1ID, m.Player2ID, m.Player1Score, m.Player2Score)
+// renderApproved produces the 2-line scoreboard message shown when a match
+// becomes APPROVED. Each player slot is "<s21 nickname> (@<telegram username>)"
+// when both are known, gracefully degrading when one or both are missing.
+// The winner is placed on the left.
+func (h *Handlers) renderApproved(ctx context.Context, groupID int64, m models.Match) string {
+	p1 := h.playerLabel(ctx, groupID, m.Player1ID)
+	p2 := h.playerLabel(ctx, groupID, m.Player2ID)
+	if m.Player1Score >= m.Player2Score {
+		return fmt.Sprintf("Match #%d confirmed.\n%s %d — %d %s",
+			m.MatchID, p1, m.Player1Score, m.Player2Score, p2)
+	}
+	return fmt.Sprintf("Match #%d confirmed.\n%s %d — %d %s",
+		m.MatchID, p2, m.Player2Score, m.Player1Score, p1)
+}
+
+// playerLabel returns "<s21 nickname> (@<telegram username>)" when both are
+// available, falling back to whichever is known, or "Player <id>" when
+// neither identity nor the participants cache yields anything.
+func (h *Handlers) playerLabel(ctx context.Context, groupID, telegramID int64) string {
+	nickname := ""
+	if svc := h.Identity(); svc != nil {
+		if iu, err := svc.GetByTelegram(ctx, telegramID); err == nil && iu.Found {
+			nickname = iu.Nickname
+		}
+	}
+	username := ""
+	if p, err := h.Store.Participants().Get(ctx, groupID, telegramID); err == nil {
+		username = p.TelegramUsername
+	}
+	switch {
+	case nickname != "" && username != "":
+		return fmt.Sprintf("%s (@%s)", nickname, username)
+	case nickname != "":
+		return nickname
+	case username != "":
+		return "@" + username
+	default:
+		return fmt.Sprintf("Player %d", telegramID)
+	}
 }
 
 // isChatAdmin is a thin wrapper that swallows transport errors so callers can
