@@ -115,8 +115,37 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 		text += "\n" + p2.Note
 	}
 
+	// Two independent gates can keep a match out of the ratings: it has to be
+	// APPROVED (PENDING matches are filtered out), and both players need a
+	// nickname registered in the identity service. Surface whichever blockers
+	// actually apply at this moment so the author isn't left guessing.
+	var notes []string
+	if !isAdmin {
+		notes = append(notes, "Won't affect ratings until both players confirm (or a chat admin confirms).")
+	}
+	var missing []string
+	if !h.hasNickname(ctx, p1.TelegramID) {
+		missing = append(missing, p1.Display)
+	}
+	if !h.hasNickname(ctx, p2.TelegramID) {
+		missing = append(missing, p2.Display)
+	}
+	if len(missing) > 0 {
+		verb := "must provide an S21 nickname"
+		if len(missing) > 1 {
+			verb = "must each provide an S21 nickname"
+		}
+		notes = append(notes,
+			fmt.Sprintf("%s %s via @school_21_identity_bot for this to count toward ratings.",
+				strings.Join(missing, " and "), verb))
+	}
+	ratingsNote := ""
+	if len(notes) > 0 {
+		ratingsNote = "\n" + strings.Join(notes, "\n")
+	}
+
 	if isAdmin {
-		_, err := h.M.SendMessage(ctx, g.GroupID, g.MatchesTopicID, text)
+		_, err := h.M.SendMessage(ctx, g.GroupID, g.MatchesTopicID, text+ratingsNote)
 		if err != nil {
 			return err
 		}
@@ -133,7 +162,7 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 	})
 	cb := fmt.Sprintf("%d:%d", g.GroupID, matchID)
 	_, err = h.M.SendKeyboard(ctx, g.GroupID, g.MatchesTopicID,
-		text+"\nWon't affect ratings until both players have provided their S21 nickname.",
+		text+ratingsNote,
 		"Confirm", cbConfirmPrefix+cb, "Cancel", cbCancelPrefix+cb)
 	return err
 }
