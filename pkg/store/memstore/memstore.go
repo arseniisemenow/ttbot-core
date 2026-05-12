@@ -193,6 +193,16 @@ func (r groupRepo) Upsert(ctx context.Context, g models.Group) error {
 	return nil
 }
 
+func (r groupRepo) List(ctx context.Context) ([]models.Group, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := make([]models.Group, 0, len(r.s.groups))
+	for _, g := range r.s.groups {
+		out = append(out, g)
+	}
+	return out, nil
+}
+
 // ---------- Matches -------------------------------------------------------
 
 type matchRepo struct{ s *Store }

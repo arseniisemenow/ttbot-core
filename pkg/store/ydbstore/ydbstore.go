@@ -532,6 +532,30 @@ VALUES ($group_id, $campus_id, $campus_name, $admin_telegram_id, $matches_topic_
 	})
 }
 
+func (r groupRepo) List(ctx context.Context) ([]models.Group, error) {
+	var out []models.Group
+	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
+		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
+			"SELECT * FROM groups;", table.NewQueryParameters())
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		if err := res.NextResultSetErr(ctx); err != nil {
+			return err
+		}
+		for res.NextRow() {
+			g, err := scanGroup(res)
+			if err != nil {
+				return err
+			}
+			out = append(out, g)
+		}
+		return nil
+	})
+	return out, err
+}
+
 // --------------------------------------------------------------- matches --
 
 type matchRepo struct{ s *Store }

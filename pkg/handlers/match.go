@@ -264,6 +264,8 @@ func (h *Handlers) dispatchCallback(ctx context.Context, q *messenger.CallbackQu
 		return h.handleConfirmTap(ctx, q, strings.TrimPrefix(data, cbConfirmPrefix))
 	case strings.HasPrefix(data, cbCancelPrefix):
 		return h.handleCancelTap(ctx, q, strings.TrimPrefix(data, cbCancelPrefix))
+	case strings.HasPrefix(data, cbAddParticipantPrefix):
+		return h.handleAddParticipantTap(ctx, q, strings.TrimPrefix(data, cbAddParticipantPrefix))
 	}
 	return h.M.AnswerCallback(ctx, q.ID, "")
 }

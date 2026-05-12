@@ -140,6 +140,30 @@ func (t *telegramAPI) SendKeyboard(ctx context.Context, chatID, topicID int64, t
 	return msg.MessageID, nil
 }
 
+func (t *telegramAPI) SendInlineKeyboard(ctx context.Context, chatID, topicID int64, text string, buttons []Button) (int64, error) {
+	rows := make([][]map[string]string, 0, len(buttons))
+	for _, b := range buttons {
+		rows = append(rows, []map[string]string{
+			{"text": b.Label, "callback_data": b.Callback},
+		})
+	}
+	payload := map[string]any{
+		"chat_id":      chatID,
+		"text":         text,
+		"reply_markup": map[string]any{"inline_keyboard": rows},
+	}
+	if topicID > 0 {
+		payload["message_thread_id"] = topicID
+	}
+	var msg struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := t.call(ctx, "sendMessage", payload, &msg); err != nil {
+		return 0, err
+	}
+	return msg.MessageID, nil
+}
+
 func (t *telegramAPI) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
 	return t.call(ctx, "editMessageText", map[string]any{
 		"chat_id":    chatID,

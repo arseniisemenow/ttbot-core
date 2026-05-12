@@ -60,6 +60,9 @@ type GroupRepo interface {
 	Get(ctx context.Context, groupID int64) (models.Group, error)
 	GetByCampus(ctx context.Context, campusID string) (models.Group, error)
 	Upsert(ctx context.Context, g models.Group) error
+	// List returns every registered group. Used by the DM-forward backfill
+	// flow to enumerate which groups a DMing admin may target.
+	List(ctx context.Context) ([]models.Group, error)
 }
 
 // MatchRepo persists match history.

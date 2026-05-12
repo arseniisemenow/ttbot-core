@@ -130,6 +130,16 @@ func (m *Mock) SendKeyboard(ctx context.Context, chatID, topicID int64, text, le
 	return id, nil
 }
 
+func (m *Mock) SendInlineKeyboard(ctx context.Context, chatID, topicID int64, text string, buttons []Button) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := m.record(Call{Method: "SendInlineKeyboard", ChatID: chatID, TopicID: topicID, Text: text, Buttons: append([]Button(nil), buttons...)})
+	if err := m.maybeFail("SendInlineKeyboard", chatID); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
 func (m *Mock) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

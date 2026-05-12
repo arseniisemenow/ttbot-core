@@ -98,6 +98,22 @@ func (h *Handlers) Dispatch(ctx context.Context, u *messenger.Update) error {
 }
 
 func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) error {
+	if m == nil || m.From == nil {
+		return nil
+	}
+	// DM-only: a forwarded message is the trigger for the participants-backfill
+	// flow. Caught here before the empty-text guard below because forwarded
+	// messages may carry no text (e.g. a forwarded photo) yet still tell us
+	// who the original sender is via ForwardFrom.
+	if m.Chat.Type == "private" {
+		if m.ForwardFrom != nil {
+			return h.handleForwardedAdd(ctx, m, m.ForwardFrom)
+		}
+		if m.ForwardSenderName != "" {
+			return h.reply(ctx, m,
+				"This user has hidden their account on forwards — can't read their telegram id this way.")
+		}
+	}
 	// Stats topic is read-only by policy: the bot maintains exactly three
 	// messages (ELO Rankings, Glicko-2 Rankings, combined Stats) and deletes
 	// anything else that lands in there. The maintained messages are posted
@@ -106,7 +122,7 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 	if h.deleteStatsTopicLitter(ctx, m) {
 		return nil
 	}
-	if m.From == nil || m.Text == "" {
+	if m.Text == "" {
 		return nil
 	}
 	cmd, args := splitCommand(m.Text)

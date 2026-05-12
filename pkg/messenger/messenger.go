@@ -23,6 +23,11 @@ type Messenger interface {
 	// to ~64 bytes (Telegram limit).
 	SendKeyboard(ctx context.Context, chatID, topicID int64, text, leftLabel, leftCallback, rightLabel, rightCallback string) (int64, error)
 
+	// SendInlineKeyboard sends a message with N inline buttons stacked one per
+	// row. Used when the caller doesn't know the button count ahead of time —
+	// e.g. "pick a group" prompts.
+	SendInlineKeyboard(ctx context.Context, chatID, topicID int64, text string, buttons []Button) (int64, error)
+
 	// EditMessage replaces the text of an existing message.
 	EditMessage(ctx context.Context, chatID, messageID int64, text string) error
 
@@ -87,6 +92,17 @@ type Message struct {
 	Text            string
 	MessageThreadID int64    // 0 if outside a forum thread
 	ReplyTo         *Message // bot's matched-message reply for /undo
+
+	// ForwardFrom is the original sender of a forwarded message. Nil unless
+	// this message is a forward from a user whose forward-privacy allows
+	// disclosing their account. The DM-forward → participants backfill flow
+	// relies on this field.
+	ForwardFrom *User
+	// ForwardSenderName is set instead of ForwardFrom when the original sender
+	// has hidden their account on forwards. We cannot recover their id in that
+	// case; this field is present only so the handler can surface a helpful
+	// "this user has hidden their account" reply.
+	ForwardSenderName string
 }
 
 // CallbackQuery is an inline-keyboard button tap.
