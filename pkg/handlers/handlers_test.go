@@ -783,6 +783,36 @@ func TestInteractiveMatchGracefulErrorOnTapFailure(t *testing.T) {
 	}
 }
 
+// TestInteractiveMatchAbandonedDraftIsGCd: a /match flow opened but never
+// confirmed gets reaped after the stale-after threshold, so an attacker
+// can't blow up RAM by opening many drafts and walking away. Direct
+// coverage of the S3 unbounded-matchDrafts vuln.
+func TestInteractiveMatchAbandonedDraftIsGCd(t *testing.T) {
+	w, g, alice, _ := setupMatchScenario(t)
+	w.SendInGroup(g, alice, 5, "/match")
+	prompt, _ := lastGridCall(w)
+	w.TapButtonOnMessage(g, alice, "m:i:opp:200", prompt.MessageID, prompt.Text)
+
+	// Advance the clock past the stale-after threshold. Any subsequent
+	// load/store operation triggers the lazy GC; we do that by sending a
+	// new /match from a different user, which triggers gcDraftsLocked.
+	w.Advance(31 * 60 * 1000000000) // 31 min in nanoseconds via time.Duration
+	bob := w.AddUser(200, "bobby")
+	w.SendInGroup(g, bob, 5, "/match")
+
+	// The original draft for (chat=-1001, msg=prompt.MessageID) should be
+	// gone. We probe by tapping its score button: with the draft GCd and
+	// the message text gone (Bob's /match doesn't touch it), the bot
+	// silently acks the stale prompt.
+	beforeEdits := len(w.Messen.CallsByMethod("EditKeyboardGrid"))
+	w.TapButtonOnMessage(g, alice, "m:i:s:1:3", prompt.MessageID, "")
+	afterEdits := len(w.Messen.CallsByMethod("EditKeyboardGrid"))
+	if afterEdits > beforeEdits {
+		t.Errorf("stale-prompt tap edited the message; GC didn't run. before=%d after=%d",
+			beforeEdits, afterEdits)
+	}
+}
+
 func TestInteractiveMatchOpponentsSortedByMatchCount(t *testing.T) {
 	w := testkit.New(t)
 	alice := w.AddUser(100, "alice").SetNickname("alice_s21", "kazan", "Kazan", true)

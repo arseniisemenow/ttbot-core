@@ -91,7 +91,27 @@ type matchDraft struct {
 	oppLabel string
 
 	p1, p2 int // -1 = unselected, else 0..9
+
+	// touchedAt is the wall-clock of the most recent state mutation on
+	// this draft. Used by the lazy GC in loadOrRestoreDraft to drop drafts
+	// the user abandoned, and to bound matchDrafts memory under flood.
+	touchedAt time.Time
 }
+
+// Bounds on the in-memory draft map. Without these a pathological client
+// (e.g. /match flood without ever confirming) could grow the map until
+// the Yandex Function container OOMs.
+const (
+	// matchDraftStaleAfter is the lazy-GC age threshold. Real users
+	// complete /match in well under a minute; 30 min is generous slack.
+	matchDraftStaleAfter = 30 * time.Minute
+
+	// matchDraftMaxEntries hard-caps the map size. The GC keeps the map
+	// well below this in practice; the cap is the floor that prevents an
+	// adversary from blowing up RAM by spamming /match faster than the GC
+	// reclaims stale drafts.
+	matchDraftMaxEntries = 5000
+)
 
 // ---------------- draft storage / restore ----------------
 
@@ -105,11 +125,16 @@ func draftKey(chatID, msgID int64) string {
 // for the cold start). Returns nil only when the message text carries no
 // recognizable MATCH_OP header — the caller treats that as "stale prompt,
 // ack and ignore".
+//
+// Side effect: every call also runs a lazy GC pass on the draft map,
+// dropping entries that haven't been touched in matchDraftStaleAfter or
+// are over the matchDraftMaxEntries cap.
 func (h *Handlers) loadOrRestoreDraft(chatID, msgID int64, msgText string) *matchDraft {
 	key := draftKey(chatID, msgID)
 	h.matchDraftsMu.RLock()
 	if d, ok := h.matchDrafts[key]; ok {
 		h.matchDraftsMu.RUnlock()
+		h.maybeGCDrafts()
 		return d
 	}
 	h.matchDraftsMu.RUnlock()
@@ -123,14 +148,18 @@ func (h *Handlers) loadOrRestoreDraft(chatID, msgID int64, msgText string) *matc
 	if d == nil {
 		return nil
 	}
+	d.touchedAt = h.Config.Now()
 	h.matchDrafts[key] = d
+	h.gcDraftsLocked()
 	return d
 }
 
 func (h *Handlers) storeDraft(chatID, msgID int64, d *matchDraft) {
 	key := draftKey(chatID, msgID)
+	d.touchedAt = h.Config.Now()
 	h.matchDraftsMu.Lock()
 	h.matchDrafts[key] = d
+	h.gcDraftsLocked()
 	h.matchDraftsMu.Unlock()
 }
 
@@ -139,6 +168,45 @@ func (h *Handlers) dropDraft(chatID, msgID int64) {
 	h.matchDraftsMu.Lock()
 	delete(h.matchDrafts, key)
 	h.matchDraftsMu.Unlock()
+}
+
+// maybeGCDrafts runs the stale-draft sweep under write lock. Cheap enough
+// (O(N) over a small N) that calling it on every tap path is fine.
+func (h *Handlers) maybeGCDrafts() {
+	h.matchDraftsMu.Lock()
+	h.gcDraftsLocked()
+	h.matchDraftsMu.Unlock()
+}
+
+// gcDraftsLocked drops drafts past matchDraftStaleAfter and, if still
+// over the cap, drops the oldest until under. Caller must hold the write
+// lock on matchDraftsMu.
+func (h *Handlers) gcDraftsLocked() {
+	now := h.Config.Now()
+	// First pass: TTL-based eviction.
+	for k, d := range h.matchDrafts {
+		if !d.touchedAt.IsZero() && now.Sub(d.touchedAt) > matchDraftStaleAfter {
+			delete(h.matchDrafts, k)
+		}
+	}
+	// Second pass: cap-based eviction. Only matters under flood.
+	if len(h.matchDrafts) <= matchDraftMaxEntries {
+		return
+	}
+	// Find and drop the oldest until under cap. O(N log N) worst-case but
+	// N is bounded by matchDraftMaxEntries so this is fine for our load.
+	type kt struct {
+		key string
+		ts  time.Time
+	}
+	all := make([]kt, 0, len(h.matchDrafts))
+	for k, d := range h.matchDrafts {
+		all = append(all, kt{k, d.touchedAt})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].ts.Before(all[j].ts) })
+	for _, e := range all[:len(all)-matchDraftMaxEntries] {
+		delete(h.matchDrafts, e.key)
+	}
 }
 
 // ---------------- header parsing / rendering ----------------
@@ -463,6 +531,11 @@ func (h *Handlers) failTapGracefully(ctx context.Context, q *messenger.CallbackQ
 func (h *Handlers) dispatchTap(ctx context.Context, q *messenger.CallbackQuery, d *matchDraft, payload string) error {
 	chatID := q.Message.Chat.ID
 	msgID := q.Message.MessageID
+
+	// Touch on every tap so the lazy GC doesn't reap an actively-used
+	// draft. Done unconditionally, before any branch — even noop / cancel
+	// taps count as "user is here".
+	d.touchedAt = h.Config.Now()
 
 	switch {
 	case payload == "cancel":

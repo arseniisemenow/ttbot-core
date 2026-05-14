@@ -56,3 +56,50 @@ func TestS21NickCacheInvalidate(t *testing.T) {
 		t.Errorf("expected miss after invalidate")
 	}
 }
+
+// TestS21NickCacheRespectsMaxSize: spraying N+1 distinct tids must not
+// grow the cache past N. Direct coverage of the S3 unbounded-growth vuln.
+func TestS21NickCacheRespectsMaxSize(t *testing.T) {
+	c := identity.NewS21NickCacheWithMax(time.Hour, 3, func() time.Time { return time.Now() })
+	c.Put(1, identity.User{TelegramID: 1})
+	c.Put(2, identity.User{TelegramID: 2})
+	c.Put(3, identity.User{TelegramID: 3})
+	c.Put(4, identity.User{TelegramID: 4})
+	if c.Size() != 3 {
+		t.Errorf("expected size capped at 3, got %d", c.Size())
+	}
+}
+
+// TestS21NickCacheLRUEvictsOldest: under cap pressure, the least-
+// recently-accessed entry is evicted, not just the oldest insertion.
+func TestS21NickCacheLRUEvictsOldest(t *testing.T) {
+	c := identity.NewS21NickCacheWithMax(time.Hour, 3, func() time.Time { return time.Now() })
+	c.Put(1, identity.User{TelegramID: 1})
+	c.Put(2, identity.User{TelegramID: 2})
+	c.Put(3, identity.User{TelegramID: 3})
+	// Promote tid=1 to most-recent; tid=2 is now LRU.
+	if _, ok := c.Get(1); !ok {
+		t.Fatal("tid=1 should be present")
+	}
+	c.Put(4, identity.User{TelegramID: 4}) // evicts tid=2
+	if _, ok := c.Get(2); ok {
+		t.Errorf("tid=2 should have been evicted as LRU")
+	}
+	for _, tid := range []int64{1, 3, 4} {
+		if _, ok := c.Get(tid); !ok {
+			t.Errorf("tid=%d should have survived eviction", tid)
+		}
+	}
+}
+
+// TestS21NickCacheRepeatedPutDoesNotGrow: repeat Puts of the same tid
+// update in place rather than piling new entries on.
+func TestS21NickCacheRepeatedPutDoesNotGrow(t *testing.T) {
+	c := identity.NewS21NickCacheWithMax(time.Hour, 5, func() time.Time { return time.Now() })
+	for i := 0; i < 100; i++ {
+		c.Put(42, identity.User{TelegramID: 42})
+	}
+	if c.Size() != 1 {
+		t.Errorf("repeated Puts should update in place; got size %d", c.Size())
+	}
+}
