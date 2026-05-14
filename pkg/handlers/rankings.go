@@ -7,14 +7,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/arseniisemenow/ttbot-core/pkg/identity"
 	"github.com/arseniisemenow/ttbot-core/pkg/messenger"
 	"github.com/arseniisemenow/ttbot-core/pkg/models"
 	"github.com/arseniisemenow/ttbot-core/pkg/rating"
-	"github.com/arseniisemenow/ttbot-core/pkg/validation"
 )
 
-// MaxRankings is the cap on how many players appear in /rankings or stats.
+// MaxRankings is the cap on how many players appear in the auto-
+// maintained stats-topic messages. The /rankings and /stats commands
+// that used to surface this data on-demand in the matches topic were
+// removed — the auto-maintained pinned messages in the stats topic
+// cover the same use case without the duplication.
 const MaxRankings = 100
 
 // buildEngines returns fresh ELO + Glicko-2 engines, picking up any
@@ -29,98 +31,6 @@ func (h *Handlers) buildEngines(ctx context.Context) (eloEng rating.Engine, glic
 		}
 	}
 	return rating.NewELO(), rating.NewGlicko2(periodDays)
-}
-
-// handleRankings replies in the matches topic with both engines' top-100.
-func (h *Handlers) handleRankings(ctx context.Context, m *messenger.Message) error {
-	g, err := h.Store.Groups().Get(ctx, m.Chat.ID)
-	if err != nil || !g.FullyConfigured() || m.MessageThreadID != g.MatchesTopicID {
-		return nil
-	}
-	eloEng, glickoEng := h.buildEngines(ctx)
-	eloText, err := h.renderRankings(ctx, g, eloEng, "ELO Rankings")
-	if err != nil {
-		return err
-	}
-	glText, err := h.renderRankings(ctx, g, glickoEng, "Glicko-2 Rankings")
-	if err != nil {
-		return err
-	}
-	return h.reply(ctx, m, eloText+"\n\n"+glText)
-}
-
-// handleStats replies with the caller's (or named user's) stats under both engines.
-func (h *Handlers) handleStats(ctx context.Context, m *messenger.Message, args string) error {
-	g, err := h.Store.Groups().Get(ctx, m.Chat.ID)
-	if err != nil || !g.FullyConfigured() || m.MessageThreadID != g.MatchesTopicID {
-		return nil
-	}
-	target := m.From.ID
-	args = strings.TrimSpace(args)
-	if args != "" {
-		id, err := validation.ParseIdentifier(args)
-		if err != nil {
-			return h.reply(ctx, m, "Usage: /stats [@user|s21_nickname]")
-		}
-		if id.IsTelegram {
-			p, err := h.Store.Participants().GetByUsername(ctx, g.GroupID, id.Value)
-			if err != nil {
-				return h.reply(ctx, m, "Player not in rankings yet.")
-			}
-			target = p.TelegramID
-		} else {
-			var ius []identity.User
-			err := h.withIdentity(ctx, func(svc *identity.Service) error {
-				got, err := svc.GetUsersByNickname(ctx, id.Value)
-				if err != nil {
-					return err
-				}
-				ius = got
-				return nil
-			})
-			if err != nil || len(ius) == 0 {
-				return h.reply(ctx, m, "Player not in rankings yet.")
-			}
-			target = ius[0].TelegramID
-		}
-	}
-	if !h.hasNickname(ctx, target) {
-		return h.reply(ctx, m, "Player not in rankings yet.")
-	}
-
-	eloEng, glickoEng := h.buildEngines(ctx)
-	eloPR, err := h.computeRatingsFor(ctx, g, eloEng)
-	if err != nil {
-		return err
-	}
-	glPR, err := h.computeRatingsFor(ctx, g, glickoEng)
-	if err != nil {
-		return err
-	}
-	idStr := strconv.FormatInt(target, 10)
-	eloR, eloHas := eloPR[idStr]
-	glR, glHas := glPR[idStr]
-	display := h.playerLabel(ctx, g.GroupID, target)
-	if !eloHas && !glHas {
-		return h.reply(ctx, m, fmt.Sprintf("%s\nMatches: 0 | Wins: 0 | Losses: 0 | Win Rate: — | No rated matches yet.", display))
-	}
-	chosen := eloR
-	if !eloHas {
-		chosen = glR
-	}
-	wr := "—"
-	if chosen.Wins+chosen.Losses > 0 {
-		wr = fmt.Sprintf("%.0f%%", 100*float64(chosen.Wins)/float64(chosen.Wins+chosen.Losses))
-	}
-	header := fmt.Sprintf("%s\nMatches: %d | Wins: %d | Losses: %d | Win Rate: %s",
-		display, chosen.GamesPlayed, chosen.Wins, chosen.Losses, wr)
-	if eloHas {
-		header += fmt.Sprintf("\nELO: %.0f", eloR.Rating)
-	}
-	if glHas {
-		header += fmt.Sprintf("\nGlicko-2: %.0f (RD %.0f)", glR.Rating, glR.Deviation)
-	}
-	return h.reply(ctx, m, header)
 }
 
 // computeRatingsFor reads matches in the group, filters to APPROVED matches

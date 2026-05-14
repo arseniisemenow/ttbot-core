@@ -41,6 +41,18 @@ type Messenger interface {
 	// /match flow (opponent picker grid, score picker columns).
 	SendKeyboardGrid(ctx context.Context, chatID, topicID int64, text string, rows [][]Button) (int64, error)
 
+	// SendKeyboardGridHTML is the HTML-parse-mode sibling. Used for prompts
+	// that carry a state tag at the end wrapped in <tg-spoiler> — Telegram
+	// renders the tag as a hidden chip the user can tap to reveal, instead of
+	// leaking [MATCH_OP=...] noise as plain text. q.Message.Text on callbacks
+	// arrives with the HTML markup stripped, so regex-based parsing of the
+	// tag still works unchanged.
+	SendKeyboardGridHTML(ctx context.Context, chatID, topicID int64, html string, rows [][]Button) (int64, error)
+
+	// SendMessageWithForceReplyHTML is the HTML-parse-mode sibling of
+	// SendMessageWithForceReply. Same use case as above — hide the state tag.
+	SendMessageWithForceReplyHTML(ctx context.Context, chatID int64, html, placeholder string) (int64, error)
+
 	// EditMessage replaces the text of an existing message.
 	EditMessage(ctx context.Context, chatID, messageID int64, text string) error
 
@@ -52,6 +64,9 @@ type Messenger interface {
 	// EditKeyboardGrid is the grid-shaped sibling of EditKeyboard. Pass nil or
 	// empty rows to clear the keyboard.
 	EditKeyboardGrid(ctx context.Context, chatID, messageID int64, text string, rows [][]Button) error
+
+	// EditKeyboardGridHTML is the HTML-parse-mode sibling of EditKeyboardGrid.
+	EditKeyboardGridHTML(ctx context.Context, chatID, messageID int64, html string, rows [][]Button) error
 
 	// DeleteMessage removes a message.
 	DeleteMessage(ctx context.Context, chatID, messageID int64) error

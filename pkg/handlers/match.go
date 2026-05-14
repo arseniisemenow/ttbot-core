@@ -42,7 +42,7 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 		return h.reply(ctx, m, "Topics not configured. Admin: run /set_matches_topic and /set_stats_topic.")
 	}
 	if m.MessageThreadID != g.MatchesTopicID {
-		return nil // wrong topic — silent ignore per docs
+		return h.reply(ctx, m, "/match must be run in the matches topic of this group.")
 	}
 
 	// No-args form opens the interactive picker. Typed-args form continues
@@ -155,7 +155,10 @@ func (h *Handlers) handleMatch(ctx context.Context, m *messenger.Message, args s
 	}
 	ratingsNote := ""
 	if len(notes) > 0 {
-		ratingsNote = "\n" + strings.Join(notes, "\n")
+		// Blank line + em-dash divider before the notes so the match summary
+		// at the top reads cleanly and the auxiliary notes are visually
+		// secondary.
+		ratingsNote = "\n\n— " + strings.Join(notes, "\n— ")
 	}
 
 	if isAdmin {
@@ -195,7 +198,7 @@ func (h *Handlers) resolveMatchToken(ctx context.Context, groupID int64, token s
 	if id.IsTelegram {
 		p, err := h.Store.Participants().GetByUsername(ctx, groupID, id.Value)
 		if err != nil {
-			return matchPlayer{}, fmt.Errorf("@%s is not known in this group. They need to join first (Telegram needs to send a chat_member event for the bot to see their username).", id.Value)
+			return matchPlayer{}, fmt.Errorf("@%s hasn't joined this group yet — ask them to send /ping in the matches topic so I learn their username.", id.Value)
 		}
 		return matchPlayer{
 			TelegramID: p.TelegramID,

@@ -17,8 +17,11 @@ func (h *Handlers) handleUndo(ctx context.Context, m *messenger.Message, args st
 	if err != nil {
 		return nil
 	}
-	if !g.FullyConfigured() || m.MessageThreadID != g.MatchesTopicID {
+	if !g.FullyConfigured() {
 		return nil
+	}
+	if m.MessageThreadID != g.MatchesTopicID {
+		return h.reply(ctx, m, "/undo must be run in the matches topic of this group.")
 	}
 
 	// Match-ID extraction: from args, then from the replied message text.
@@ -44,7 +47,7 @@ func (h *Handlers) handleUndo(ctx context.Context, m *messenger.Message, args st
 	isParticipant := match.Player1ID == m.From.ID || match.Player2ID == m.From.ID
 	isAdmin := h.isChatAdmin(ctx, m.Chat.ID, m.From.ID)
 	if !isParticipant && !isAdmin {
-		return h.reply(ctx, m, "Error: Only match participants or group admins can undo matches.")
+		return h.reply(ctx, m, "Only match participants or group admins can undo matches.")
 	}
 	// Only APPROVED or UNDONE can be toggled.
 	if match.Status != models.MatchStatusApproved && match.Status != models.MatchStatusUndone {

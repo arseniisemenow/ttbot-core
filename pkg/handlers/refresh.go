@@ -69,7 +69,8 @@ func (h *Handlers) handleRefreshUsernames(ctx context.Context, m *messenger.Mess
 	}
 	changed, err := h.refreshGroupUsernames(ctx, g)
 	if err != nil {
-		return h.reply(ctx, m, fmt.Sprintf("Refresh failed: %v", err))
+		return h.userFacingError(ctx, m, "/refresh_usernames",
+			"Telegram is unreachable right now — try again shortly.", err)
 	}
 	return h.reply(ctx, m, fmt.Sprintf("Refresh complete. %d participants updated.", changed))
 }

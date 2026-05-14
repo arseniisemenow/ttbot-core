@@ -57,7 +57,7 @@ const (
 	miPrefix      = "m:i:"
 	oppPerPage    = 15
 	oppGridCols   = 3
-	scoreMaxVal   = 9 // score range 0..9 → 10 cells per column
+	scoreMaxVal   = 7 // score range 0..7 → 8 cells per column, compact on mobile
 	unselectedTok = "-"
 )
 
@@ -211,12 +211,27 @@ func (h *Handlers) gcDraftsLocked() {
 
 // ---------------- header parsing / rendering ----------------
 
+// Header regexes — the leading "^" anchor was dropped when the tag was
+// moved to the END of the message (wrapped in <tg-spoiler>) so that the
+// user-visible message reads cleanly with the bookkeeping tucked away.
+// Cold-restore parses whichever tag appears anywhere in the message text.
+// Telegram strips HTML markup before delivering text on callbacks, so the
+// regex sees the bare `[MATCH_OP=...]` even when the message was sent
+// with parse_mode=HTML.
 var (
 	matchOppHeaderRe = regexp.MustCompile(
-		`^\[MATCH_OP=opp owner=(\d+) owner_label=(\S*) page=(\d+)\]`)
+		`\[MATCH_OP=opp owner=(\d+) owner_label=(\S*) page=(\d+)\]`)
 	matchScoreHeaderRe = regexp.MustCompile(
-		`^\[MATCH_OP=score owner=(\d+) owner_label=(\S*) opp=(\d+) opp_label=(\S*) p1=([0-9-]) p2=([0-9-])\]`)
+		`\[MATCH_OP=score owner=(\d+) owner_label=(\S*) opp=(\d+) opp_label=(\S*) p1=([0-9-]) p2=([0-9-])\]`)
 )
+
+// spoilerWrap puts a state tag inside an HTML <tg-spoiler> so Telegram
+// renders it as a hidden chip the user can tap to reveal — the visible
+// chat shows the friendly prompt, the bookkeeping is tucked away. The
+// caller MUST send the message with one of the HTML messenger methods.
+func spoilerWrap(tag string) string {
+	return "<tg-spoiler>" + tag + "</tg-spoiler>"
+}
 
 func parseDraftFromHeader(text string) *matchDraft {
 	if m := matchOppHeaderRe.FindStringSubmatch(text); m != nil {
@@ -349,8 +364,8 @@ func (h *Handlers) renderOpponentPicker(ctx context.Context, groupID int64, d *m
 	}
 	pageRows := candidates[start:end]
 
-	body := fmt.Sprintf("Page %d/%d — pick your opponent:", d.page, totalPages)
-	text := renderOppHeader(d) + "\n" + body
+	body := fmt.Sprintf("Page %d/%d — opponents, most-played first:", d.page, totalPages)
+	text := body + "\n\n" + spoilerWrap(renderOppHeader(d))
 
 	rows := [][]messenger.Button{}
 	for i := 0; i < len(pageRows); i += oppGridCols {
@@ -393,9 +408,9 @@ func (h *Handlers) renderOpponentPicker(ctx context.Context, groupID int64, d *m
 // time and cached in the draft).
 func renderScorePicker(d *matchDraft) (string, [][]messenger.Button) {
 	body := fmt.Sprintf(
-		"%s vs %s\n\nPick scores — left column is you, right is %s. Tap to (re-)select. Confirm when both sides are set.",
+		"%s vs %s\n\nTap your score on the left, %s's score on the right. Re-tap to change. Confirm when both sides have a •.",
 		safeLabel(d.ownerLabel), safeLabel(d.oppLabel), safeLabel(d.oppLabel))
-	text := renderScoreHeader(d) + "\n" + body
+	text := body + "\n\n" + spoilerWrap(renderScoreHeader(d))
 
 	rows := [][]messenger.Button{}
 	for v := 0; v <= scoreMaxVal; v++ {
@@ -456,14 +471,18 @@ func (h *Handlers) startInteractiveMatch(ctx context.Context, m *messenger.Messa
 	text, rows, err := h.renderOpponentPicker(ctx, g.GroupID, d)
 	perfLog("start: renderOpponentPicker dur=%v", time.Since(tRender))
 	if err != nil {
-		return h.reply(ctx, m, "Couldn't build opponent list: "+err.Error())
+		return h.userFacingError(ctx, m, "/match: opponent list",
+			"The database is unreachable right now — try /match again shortly.", err)
 	}
 	if rows == nil {
 		return h.reply(ctx, m, "No other participants yet. Wait for someone else to /ping or send a command in this group, then try again.")
 	}
 
 	tSend := time.Now()
-	msgID, err := h.M.SendKeyboardGrid(ctx, g.GroupID, g.MatchesTopicID, text, rows)
+	// HTML send — the rendered text carries a <tg-spoiler>-wrapped state
+	// tag at the end. Telegram delivers q.Message.Text on callbacks with
+	// markup stripped, so the cold-restore regex still finds the tag.
+	msgID, err := h.M.SendKeyboardGridHTML(ctx, g.GroupID, g.MatchesTopicID, text, rows)
 	perfLog("start: SendKeyboardGrid dur=%v total=%v", time.Since(tSend), time.Since(t0))
 	if err != nil {
 		return err
@@ -670,7 +689,9 @@ func (h *Handlers) editAndAck(ctx context.Context, q *messenger.CallbackQuery, t
 	go func() {
 		defer wg.Done()
 		t := time.Now()
-		editErr = h.M.EditKeyboardGrid(ctx, chatID, msgID, text, rows)
+		// Every tap rerenders into HTML so the spoiler-wrapped state tag
+		// stays hidden after each refresh.
+		editErr = h.M.EditKeyboardGridHTML(ctx, chatID, msgID, text, rows)
 		tEdit = time.Since(t)
 	}()
 	go func() {

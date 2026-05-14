@@ -172,10 +172,10 @@ func TestMatchSelfPlayRejected(t *testing.T) {
 	w.AssertReplyContains("cannot play themselves")
 }
 
-func TestMatchWrongTopicSilent(t *testing.T) {
+func TestMatchWrongTopicReplies(t *testing.T) {
 	w, g, alice, _ := setupMatchScenario(t)
 	w.SendInGroup(g, alice, 999, "/match @bobby 3-1")
-	w.AssertNoReplies()
+	w.AssertReplyContains("must be run in the matches topic")
 }
 
 // ---------- Bare-nickname resolution --------------------------------------
@@ -305,30 +305,9 @@ func TestUndoFromReply(t *testing.T) {
 	w.AssertReplyContains("Waiting for other player")
 }
 
-// ---------- /rankings + /stats -------------------------------------------
-
-func TestRankingsAfterApprovedMatches(t *testing.T) {
-	w, g, alice, bob := setupMatchScenario(t)
-	w.Store.PutMatchExt(models.Match{
-		GroupID: g.GroupID, MatchID: 1, Player1ID: alice.TelegramID, Player2ID: bob.TelegramID,
-		Player1Score: 3, Player2Score: 0, Status: models.MatchStatusApproved,
-		PlayedAt: time.Now(), CreatedAt: time.Now(),
-	})
-	w.SendInGroup(g, alice, 5, "/rankings")
-	w.AssertReplyContains("alice_s21")
-	w.AssertReplyContains("bob_s21")
-}
-
-func TestStatsForCaller(t *testing.T) {
-	w, g, alice, bob := setupMatchScenario(t)
-	w.Store.PutMatchExt(models.Match{
-		GroupID: g.GroupID, MatchID: 1, Player1ID: alice.TelegramID, Player2ID: bob.TelegramID,
-		Player1Score: 3, Player2Score: 0, Status: models.MatchStatusApproved,
-		PlayedAt: time.Now(), CreatedAt: time.Now(),
-	})
-	w.SendInGroup(g, alice, 5, "/stats")
-	w.AssertReplyContains("Wins: 1")
-}
+// (The /rankings and /stats commands were dropped in favour of the
+// auto-maintained pinned messages in the stats topic. The stats-topic
+// upkeep is tested via refreshStatsTopic and TestStatsTopicLitter*.)
 
 // ---------- Periodic job --------------------------------------------------
 
@@ -539,7 +518,7 @@ func TestInteractiveMatchOpensOpponentPicker(t *testing.T) {
 	if !strings.Contains(got.Text, "[MATCH_OP=opp owner=100") {
 		t.Errorf("opp header missing in text: %q", got.Text)
 	}
-	if !strings.Contains(got.Text, "pick your opponent") {
+	if !strings.Contains(got.Text, "opponents, most-played first") {
 		t.Errorf("opp prompt body missing: %q", got.Text)
 	}
 	// Bob should be in the list; Alice (caller) should not.
@@ -582,9 +561,9 @@ func TestInteractiveMatchOpponentTapShowsScorePicker(t *testing.T) {
 			t.Errorf("score header missing %q in: %q", want, got.Text)
 		}
 	}
-	// Score grid: 10 rows × 2 cols + confirm/cancel row + back row = 23 buttons.
-	if len(got.Buttons) != 10*2+2+1 {
-		t.Errorf("expected 23 buttons (20 score + confirm/cancel + back), got %d", len(got.Buttons))
+	// Score grid: 8 rows × 2 cols + confirm/cancel row + back row = 19 buttons.
+	if len(got.Buttons) != 8*2+2+1 {
+		t.Errorf("expected 19 buttons (16 score + confirm/cancel + back), got %d", len(got.Buttons))
 	}
 	_ = bob
 }

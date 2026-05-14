@@ -14,8 +14,9 @@ import (
 )
 
 // loginPromptRegex matches the bot's two-step /login force-reply prompt
-// header. Same tag shape as identity-bot so the two flows stay symmetric.
-var loginPromptRegex = regexp.MustCompile(`^\[LOGIN_OP=set\]`)
+// state tag. The tag now sits at the END of the prompt (inside a
+// <tg-spoiler>), so the regex is no longer anchored to ^.
+var loginPromptRegex = regexp.MustCompile(`\[LOGIN_OP=set\]`)
 
 // handleLogin is step 1 of the two-step /login flow. Inline-args form is
 // rejected (Telegram keeps command text in chat history). With no args we
@@ -24,12 +25,13 @@ func (h *Handlers) handleLogin(ctx context.Context, m *messenger.Message, args s
 	if strings.TrimSpace(args) != "" {
 		return h.reply(ctx, m, "/login takes no arguments. Run it again with nothing after the slash.")
 	}
-	prompt := "[LOGIN_OP=set]\n\n" +
-		"Reply with your S21 credentials as `login:password` on a single line. " +
-		"I'll authenticate against S21, encrypt the result, and **delete your reply immediately** so the creds don't linger in this chat. " +
-		"Anyone can /login — multiple logged-in users let me keep working when one set of creds rotates."
-	if _, err := h.M.SendMessageWithForceReply(ctx, m.Chat.ID, prompt, "login:password"); err != nil {
-		return h.reply(ctx, m, "Couldn't send the prompt: "+err.Error())
+	prompt := "Reply with your S21 credentials as `login:password` on a single line. " +
+		"I'll authenticate against S21, encrypt the result, and <b>delete your reply immediately</b> so the creds don't linger in this chat. " +
+		"Anyone can /login — multiple logged-in users let me keep working when one set of creds rotates." +
+		"\n\n" + spoilerWrap("[LOGIN_OP=set]")
+	if _, err := h.M.SendMessageWithForceReplyHTML(ctx, m.Chat.ID, prompt, "login:password"); err != nil {
+		return h.userFacingError(ctx, m, "/login: send prompt",
+			"Telegram is unreachable right now — try /login again shortly.", err)
 	}
 	return nil
 }
@@ -65,12 +67,13 @@ func (h *Handlers) handleLoginReply(ctx context.Context, m *messenger.Message) e
 	case errors.Is(err, s21account.ErrInvalidCredentials):
 		return h.reply(ctx, m, "S21 rejected those credentials. Run /login again to retry.")
 	case err != nil:
-		return h.reply(ctx, m, "S21 is unavailable right now. Try again later.")
+		return h.userFacingError(ctx, m, "/login: validate",
+			"S21 is unavailable right now. Try /login again shortly.", err)
 	}
 	greeting := "You're now logged in as " + account.S21Login
 	if account.CampusName != "" {
 		greeting += " (" + account.CampusName + ")"
 	}
-	greeting += ". I'll use your creds (alongside other logged-in users') for S21 API calls."
+	greeting += ". I'll use your creds, alongside other logged-in users, for S21 API calls."
 	return h.reply(ctx, m, greeting)
 }

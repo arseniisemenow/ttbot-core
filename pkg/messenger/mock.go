@@ -179,6 +179,21 @@ func (m *Mock) EditKeyboardGrid(ctx context.Context, chatID, messageID int64, te
 	return m.maybeFail("EditKeyboardGrid", chatID)
 }
 
+// SendKeyboardGridHTML / EditKeyboardGridHTML / SendMessageWithForceReplyHTML
+// — same shape as the plain-text siblings; the mock forwards (the HTML
+// rendering is a Telegram-side concern that mocks don't simulate).
+func (m *Mock) SendKeyboardGridHTML(ctx context.Context, chatID, topicID int64, html string, rows [][]Button) (int64, error) {
+	return m.SendKeyboardGrid(ctx, chatID, topicID, html, rows)
+}
+
+func (m *Mock) EditKeyboardGridHTML(ctx context.Context, chatID, messageID int64, html string, rows [][]Button) error {
+	return m.EditKeyboardGrid(ctx, chatID, messageID, html, rows)
+}
+
+func (m *Mock) SendMessageWithForceReplyHTML(ctx context.Context, chatID int64, html, placeholder string) (int64, error) {
+	return m.SendMessageWithForceReply(ctx, chatID, html, placeholder)
+}
+
 func (m *Mock) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

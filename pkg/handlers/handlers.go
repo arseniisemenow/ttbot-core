@@ -224,10 +224,6 @@ func (h *Handlers) dispatchMessage(ctx context.Context, m *messenger.Message) er
 		return h.handleMatch(ctx, m, args)
 	case "/undo":
 		return h.handleUndo(ctx, m, args)
-	case "/rankings":
-		return h.handleRankings(ctx, m)
-	case "/stats":
-		return h.handleStats(ctx, m, args)
 	case "/ping":
 		return h.handlePing(ctx, m)
 	}

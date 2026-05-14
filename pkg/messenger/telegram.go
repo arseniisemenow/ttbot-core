@@ -180,6 +180,14 @@ func (t *telegramAPI) SendInlineKeyboard(ctx context.Context, chatID, topicID in
 }
 
 func (t *telegramAPI) SendKeyboardGrid(ctx context.Context, chatID, topicID int64, text string, rows [][]Button) (int64, error) {
+	return t.sendKeyboardGrid(ctx, chatID, topicID, text, rows, "")
+}
+
+func (t *telegramAPI) SendKeyboardGridHTML(ctx context.Context, chatID, topicID int64, html string, rows [][]Button) (int64, error) {
+	return t.sendKeyboardGrid(ctx, chatID, topicID, html, rows, "HTML")
+}
+
+func (t *telegramAPI) sendKeyboardGrid(ctx context.Context, chatID, topicID int64, text string, rows [][]Button, parseMode string) (int64, error) {
 	kb := make([][]map[string]string, 0, len(rows))
 	for _, row := range rows {
 		cells := make([]map[string]string, 0, len(row))
@@ -196,6 +204,29 @@ func (t *telegramAPI) SendKeyboardGrid(ctx context.Context, chatID, topicID int6
 	if topicID > 0 {
 		payload["message_thread_id"] = topicID
 	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
+	}
+	var msg struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := t.call(ctx, "sendMessage", payload, &msg); err != nil {
+		return 0, err
+	}
+	return msg.MessageID, nil
+}
+
+func (t *telegramAPI) SendMessageWithForceReplyHTML(ctx context.Context, chatID int64, html, placeholder string) (int64, error) {
+	rm := map[string]any{"force_reply": true, "selective": true}
+	if placeholder != "" {
+		rm["input_field_placeholder"] = placeholder
+	}
+	payload := map[string]any{
+		"chat_id":      chatID,
+		"text":         html,
+		"reply_markup": rm,
+		"parse_mode":   "HTML",
+	}
 	var msg struct {
 		MessageID int64 `json:"message_id"`
 	}
@@ -206,6 +237,14 @@ func (t *telegramAPI) SendKeyboardGrid(ctx context.Context, chatID, topicID int6
 }
 
 func (t *telegramAPI) EditKeyboardGrid(ctx context.Context, chatID, messageID int64, text string, rows [][]Button) error {
+	return t.editKeyboardGrid(ctx, chatID, messageID, text, rows, "")
+}
+
+func (t *telegramAPI) EditKeyboardGridHTML(ctx context.Context, chatID, messageID int64, html string, rows [][]Button) error {
+	return t.editKeyboardGrid(ctx, chatID, messageID, html, rows, "HTML")
+}
+
+func (t *telegramAPI) editKeyboardGrid(ctx context.Context, chatID, messageID int64, text string, rows [][]Button, parseMode string) error {
 	kb := make([][]map[string]string, 0, len(rows))
 	for _, row := range rows {
 		cells := make([]map[string]string, 0, len(row))
@@ -214,12 +253,16 @@ func (t *telegramAPI) EditKeyboardGrid(ctx context.Context, chatID, messageID in
 		}
 		kb = append(kb, cells)
 	}
-	return t.call(ctx, "editMessageText", map[string]any{
+	payload := map[string]any{
 		"chat_id":      chatID,
 		"message_id":   messageID,
 		"text":         text,
 		"reply_markup": map[string]any{"inline_keyboard": kb},
-	}, nil)
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
+	}
+	return t.call(ctx, "editMessageText", payload, nil)
 }
 
 func (t *telegramAPI) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
