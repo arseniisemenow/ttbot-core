@@ -39,11 +39,20 @@ type Config struct {
 }
 
 // s21NickCacheTTL is how long a cached S21 nickname (or cached "no
-// nickname") record is considered fresh before the next access refetches
-// from the identity service. Long because S21 nicknames change extremely
-// rarely (only when a user runs /provide_nickname in the identity bot)
-// and the displayed string is purely cosmetic.
+// nickname") record in the in-process LRU is considered fresh before
+// the next access refetches via the durable layer (and on miss from the
+// identity service).
 const s21NickCacheTTL = 7 * 24 * time.Hour
+
+// s21NickDurableTTL is the TTL for the durable YDB-backed layer that
+// sits behind the in-process LRU. Survives container recycles and is
+// shared across parallel containers. 30 days because S21 nicknames
+// change extremely rarely (only when a user runs /provide_nickname in
+// the identity bot) and the displayed string is purely cosmetic — a
+// month-old cached label is fine. A user who actually changes their
+// nickname can re-bust on demand via /refresh_usernames or by running
+// any command that picks up the in-process LRU TTL eviction first.
+const s21NickDurableTTL = 30 * 24 * time.Hour
 
 // Handlers holds all dependencies. Construct with New, then call Dispatch
 // or PeriodicJob.

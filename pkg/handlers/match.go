@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -276,10 +277,42 @@ func (h *Handlers) hasNickname(ctx context.Context, telegramID int64) bool {
 // Errors (identity unavailable, no healthy login) collapse to false — the
 // caller's fallbacks (Telegram username, "Player N") cover those cases.
 func (h *Handlers) lookupS21Nickname(ctx context.Context, telegramID int64) (string, bool) {
+	// L1: in-process LRU. ~ns. Per-container, lost on cold start.
 	if u, ok := h.S21Nicks.Get(telegramID); ok {
-		perfLog("lookupS21Nickname tid=%d hit=local cache", telegramID)
+		perfLog("lookupS21Nickname tid=%d hit=local", telegramID)
 		return u.Nickname, u.Found && u.Nickname != ""
 	}
+	// L2: durable YDB-backed cache. ~tens of ms. Shared across all warm
+	// containers and survives recycles. Negative ("found=false") entries
+	// are honored so a non-registered telegram_id doesn't keep hitting
+	// identity-service on every cold start. On hit, promote to L1.
+	if h.Store != nil {
+		tDb := time.Now()
+		if row, err := h.Store.S21NickCache().Get(ctx, telegramID); err == nil {
+			if h.Config.Now().Sub(row.CachedAt) <= s21NickDurableTTL {
+				u := identity.User{
+					TelegramID:    row.TelegramID,
+					Nickname:      row.Nickname,
+					CampusID:      row.CampusID,
+					CampusName:    row.CampusName,
+					CoalitionName: row.CoalitionName,
+					Found:         row.Found,
+				}
+				h.S21Nicks.Put(telegramID, u)
+				perfLog("lookupS21Nickname tid=%d hit=durable dur=%v age=%v", telegramID, time.Since(tDb), h.Config.Now().Sub(row.CachedAt).Round(time.Second))
+				return u.Nickname, u.Found && u.Nickname != ""
+			}
+			// Row exists but is past TTL — fall through to identity. Don't
+			// delete here; the next successful Upsert overwrites it.
+			perfLog("lookupS21Nickname tid=%d durable=stale dur=%v age=%v", telegramID, time.Since(tDb), h.Config.Now().Sub(row.CachedAt).Round(time.Second))
+		} else if !errors.Is(err, store.ErrNotFound) {
+			// Don't fail the lookup on a cache I/O hiccup — log and fall
+			// through to identity. The cache is best-effort.
+			log.Printf("s21_nick_cache: durable read failed tid=%d: %v", telegramID, err)
+		}
+	}
+	// L3: identity service round-trip (which itself caches X-S21-Token in
+	// its own durable layer). Network call, hundreds of ms typical.
 	tIdent := time.Now()
 	var got identity.User
 	var fetched bool
@@ -293,11 +326,26 @@ func (h *Handlers) lookupS21Nickname(ctx context.Context, telegramID int64) (str
 		return nil
 	})
 	perfLog("lookupS21Nickname tid=%d hit=remote fetched=%t dur=%v", telegramID, fetched, time.Since(tIdent))
-	if fetched {
-		h.S21Nicks.Put(telegramID, got)
-		return got.Nickname, got.Found && got.Nickname != ""
+	if !fetched {
+		return "", false
 	}
-	return "", false
+	// Write-through to both cache layers so the next request hits L1 (and
+	// other containers / cold starts hit L2).
+	h.S21Nicks.Put(telegramID, got)
+	if h.Store != nil {
+		if err := h.Store.S21NickCache().Upsert(ctx, store.S21NickCacheEntry{
+			TelegramID:    telegramID,
+			Found:         got.Found,
+			Nickname:      got.Nickname,
+			CampusID:      got.CampusID,
+			CampusName:    got.CampusName,
+			CoalitionName: got.CoalitionName,
+			CachedAt:      h.Config.Now().UTC(),
+		}); err != nil {
+			log.Printf("s21_nick_cache: durable write failed tid=%d: %v", telegramID, err)
+		}
+	}
+	return got.Nickname, got.Found && got.Nickname != ""
 }
 
 // dispatchCallback handles inline-keyboard taps.

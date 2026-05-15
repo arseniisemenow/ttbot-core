@@ -91,6 +91,7 @@ func (s *Store) Matches() store.MatchRepo                       { return matchRe
 func (s *Store) MatchConfirmations() store.MatchConfirmationRepo { return confirmRepo{s} }
 func (s *Store) UndoCommands() store.UndoRepo                   { return undoRepo{s} }
 func (s *Store) Settings() store.SettingsRepo                   { return settingsRepo{s} }
+func (s *Store) S21NickCache() store.S21NickCacheRepo           { return nickCacheRepo{s} }
 
 // ---------------------------------------------------------------- matchID --
 
@@ -1199,6 +1200,85 @@ func (s *Store) AwaitReady(ctx context.Context) error {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// ---------- S21NickCache --------------------------------------------------
+
+type nickCacheRepo struct{ s *Store }
+
+func (r nickCacheRepo) Get(ctx context.Context, tid int64) (store.S21NickCacheEntry, error) {
+	var e store.S21NickCacheEntry
+	err := r.s.doRO(ctx, func(ctx context.Context, sess table.Session) error {
+		_, res, err := sess.Execute(ctx, table.DefaultTxControl(),
+			"DECLARE $tid AS Uint64; SELECT telegram_id, found, nickname, campus_id, campus_name, coalition_name, cached_at FROM tg_nick_cache WHERE telegram_id = $tid;",
+			table.NewQueryParameters(table.ValueParam("$tid", types.Uint64Value(uint64(tid)))))
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		if err := res.NextResultSetErr(ctx); err != nil {
+			return err
+		}
+		if !res.NextRow() {
+			return store.ErrNotFound
+		}
+		var tidU uint64
+		var nickname, campusID, campusName, coalitionName *string
+		if err := res.ScanNamed(
+			named.Required("telegram_id", &tidU),
+			named.Required("found", &e.Found),
+			named.Optional("nickname", &nickname),
+			named.Optional("campus_id", &campusID),
+			named.Optional("campus_name", &campusName),
+			named.Optional("coalition_name", &coalitionName),
+			named.Required("cached_at", &e.CachedAt),
+		); err != nil {
+			return err
+		}
+		e.TelegramID = int64(tidU)
+		if nickname != nil {
+			e.Nickname = *nickname
+		}
+		if campusID != nil {
+			e.CampusID = *campusID
+		}
+		if campusName != nil {
+			e.CampusName = *campusName
+		}
+		if coalitionName != nil {
+			e.CoalitionName = *coalitionName
+		}
+		return nil
+	})
+	return e, err
+}
+
+func (r nickCacheRepo) Upsert(ctx context.Context, e store.S21NickCacheEntry) error {
+	if e.CachedAt.IsZero() {
+		e.CachedAt = time.Now().UTC()
+	}
+	const sql = `
+DECLARE $tid AS Uint64;
+DECLARE $found AS Bool;
+DECLARE $nick AS Utf8?;
+DECLARE $cid AS Utf8?;
+DECLARE $cn AS Utf8?;
+DECLARE $coal AS Utf8?;
+DECLARE $cat AS Timestamp;
+UPSERT INTO tg_nick_cache (telegram_id, found, nickname, campus_id, campus_name, coalition_name, cached_at)
+VALUES ($tid, $found, $nick, $cid, $cn, $coal, $cat);`
+	return r.s.doTx(ctx, func(ctx context.Context, tx table.TransactionActor) error {
+		_, err := tx.Execute(ctx, sql, table.NewQueryParameters(
+			table.ValueParam("$tid", types.Uint64Value(uint64(e.TelegramID))),
+			table.ValueParam("$found", types.BoolValue(e.Found)),
+			table.ValueParam("$nick", optStr(e.Nickname)),
+			table.ValueParam("$cid", optStr(e.CampusID)),
+			table.ValueParam("$cn", optStr(e.CampusName)),
+			table.ValueParam("$coal", optStr(e.CoalitionName)),
+			table.ValueParam("$cat", types.TimestampValueFromTime(e.CachedAt.UTC())),
+		))
+		return err
+	})
 }
 
 // silence unused import warnings if SDK signature changes.

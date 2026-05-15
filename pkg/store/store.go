@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	s21account "github.com/arseniisemenow/s21-account-go"
 
@@ -37,6 +38,7 @@ type Store interface {
 	MatchConfirmations() MatchConfirmationRepo
 	UndoCommands() UndoRepo
 	Settings() SettingsRepo
+	S21NickCache() S21NickCacheRepo
 
 	// AllocateAndInsertMatch allocates the next match_id for the group, asks
 	// `build` to populate the match row with that ID baked in, and inserts
@@ -129,4 +131,37 @@ type UndoRepo interface {
 type SettingsRepo interface {
 	Get(ctx context.Context, key string) (models.BotSetting, error)
 	Set(ctx context.Context, key, value string, updatedBy int64) error
+}
+
+// S21NickCacheEntry is one row in tg_nick_cache — a durable record of
+// "this telegram_id has been resolved against identity-service and the
+// answer (nickname or 'no such user') is valid until CachedAt+TTL".
+//
+// Found=false rows are kept and respected: caching a "no nickname"
+// answer is the whole point of negative caching here. Without it, every
+// /match in a group with non-registered players would re-hit identity
+// service for the same telegram_ids on every cold start.
+type S21NickCacheEntry struct {
+	TelegramID    int64
+	Found         bool
+	Nickname      string
+	CampusID      string
+	CampusName    string
+	CoalitionName string
+	CachedAt      time.Time
+}
+
+// S21NickCacheRepo persists the durable layer behind ttbot's in-RAM
+// S21NickCache. Lookup chain in handlers: in-RAM LRU → this repo →
+// identity-service. Write-through on identity hit so both layers warm
+// simultaneously. The repo never filters by freshness — the caller
+// compares CachedAt against TTL at the call site so a single tunable
+// (s21NickDurableTTL) governs effective freshness.
+type S21NickCacheRepo interface {
+	// Get returns the row for telegram_id, or ErrNotFound when no row
+	// exists at all. An expired row is still returned — the caller decides
+	// whether to honour or re-fetch.
+	Get(ctx context.Context, telegramID int64) (S21NickCacheEntry, error)
+	// Upsert writes (or overwrites) the row. Idempotent.
+	Upsert(ctx context.Context, e S21NickCacheEntry) error
 }

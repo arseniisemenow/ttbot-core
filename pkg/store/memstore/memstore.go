@@ -30,6 +30,7 @@ type Store struct {
 	undos         map[undoKey]models.UndoCommand
 	settings      map[string]models.BotSetting
 	matchCounters map[int64]uint64
+	nickCache     map[int64]store.S21NickCacheEntry
 }
 
 type participantKey struct{ Group, User int64 }
@@ -60,6 +61,7 @@ func New() *Store {
 		undos:         map[undoKey]models.UndoCommand{},
 		settings:      map[string]models.BotSetting{},
 		matchCounters: map[int64]uint64{},
+		nickCache:     map[int64]store.S21NickCacheEntry{},
 	}
 }
 
@@ -74,6 +76,7 @@ func (s *Store) Matches() store.MatchRepo                         { return match
 func (s *Store) MatchConfirmations() store.MatchConfirmationRepo  { return confirmRepo{s} }
 func (s *Store) UndoCommands() store.UndoRepo                     { return undoRepo{s} }
 func (s *Store) Settings() store.SettingsRepo                     { return settingsRepo{s} }
+func (s *Store) S21NickCache() store.S21NickCacheRepo             { return nickCacheRepo{s} }
 
 // AllocateAndInsertMatch allocates the next match_id for the group, asks
 // `build` to populate the row, and inserts atomically.
@@ -500,5 +503,26 @@ func (r settingsRepo) Set(ctx context.Context, key, value string, by int64) erro
 		UpdatedAt: time.Now(),
 		UpdatedBy: by,
 	}
+	return nil
+}
+
+// ---------- S21NickCache --------------------------------------------------
+
+type nickCacheRepo struct{ s *Store }
+
+func (r nickCacheRepo) Get(_ context.Context, tid int64) (store.S21NickCacheEntry, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	e, ok := r.s.nickCache[tid]
+	if !ok {
+		return store.S21NickCacheEntry{}, store.ErrNotFound
+	}
+	return e, nil
+}
+
+func (r nickCacheRepo) Upsert(_ context.Context, e store.S21NickCacheEntry) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	r.s.nickCache[e.TelegramID] = e
 	return nil
 }
